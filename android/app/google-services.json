@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "845251569451",
+    "project_id": "gracegrid-c7367",
+    "storage_bucket": "gracegrid-c7367.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:845251569451:android:0aa76d7b441566f4b8476e",
+        "android_client_info": {
+          "package_name": "com.example.grace_grid"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBaxleC8ksuCxKV7Ov6PM6Cdaz7RNodHwg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
