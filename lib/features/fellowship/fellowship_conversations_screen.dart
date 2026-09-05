@@ -8,6 +8,7 @@ import '../../core/providers/agora_chat_provider.dart';
 import '../../core/providers/mock_auth_provider.dart';
 import '../feed/providers/feed_provider.dart';
 import '../../core/data/mock_community_data.dart';
+import '../../core/services/chat_firestore_service.dart';
 import 'fellowship_chat_screen.dart';
 
 class FellowshipConversationsScreen extends ConsumerStatefulWidget {
@@ -31,7 +32,6 @@ class _FellowshipConversationsScreenState
 
   void _showStartNewChatDialog(BuildContext context) {
     final nameController = TextEditingController();
-    final usersFuture = FirebaseFirestore.instance.collection('users').limit(50).get();
 
     showModalBottomSheet(
       context: context,
@@ -41,14 +41,16 @@ class _FellowshipConversationsScreenState
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
-        return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
-          future: usersFuture,
-          builder: (ctx, snapshot) {
-            return StatefulBuilder(
-              builder: (modalContext, setModalState) {
-                final feedState = ref.watch(feedProvider);
-                final currentProfile = ref.watch(mockAuthNotifierProvider).profile;
-                // Collect unique active believers from Firestore users directory + feed posts & stories
+        return StatefulBuilder(
+          builder: (modalContext, setModalState) {
+            final feedState = ref.watch(feedProvider);
+            final currentProfile = ref.watch(mockAuthNotifierProvider).profile;
+            final isKeyboardOpen = MediaQuery.of(ctx).viewInsets.bottom > 0;
+
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: ChatFirestoreService.searchUsers(nameController.text),
+              builder: (ctx, snapshot) {
+                // Collect unique active believers from live Firestore users directory + feed posts & stories
                 final activeBelieversMap = <String, Map<String, String>>{}; // id -> {name, avatar}
 
                 if (snapshot.hasData && snapshot.data != null) {
@@ -90,8 +92,6 @@ class _FellowshipConversationsScreenState
                   if (filter.isEmpty) return true;
                   return e.value['name']!.toLowerCase().contains(filter) || e.key.toLowerCase().contains(filter);
                 }).toList();
-
-            final isKeyboardOpen = MediaQuery.of(ctx).viewInsets.bottom > 0;
 
             return Padding(
               padding: EdgeInsets.only(

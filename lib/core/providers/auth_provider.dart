@@ -343,6 +343,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await FirebaseFirestore.instance.collection('users').doc(profile.id).set({
         'uid': profile.id,
         'name': profile.name,
+        'nameLower': profile.name.toLowerCase(),
         'email': profile.email,
         'avatarUrl': profile.avatarUrl,
         'updatedAt': FieldValue.serverTimestamp(),

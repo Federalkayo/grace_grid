@@ -1,11 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_card.dart';
 import '../../core/providers/agora_chat_provider.dart';
 import '../../core/providers/mock_auth_provider.dart';
 import '../../core/services/agora_chat_service.dart';
+import '../../core/services/chat_firestore_service.dart';
 import '../feed/providers/feed_provider.dart';
 import 'voice_prayer_call_screen.dart';
 import 'video_fellowship_call_screen.dart';
@@ -89,64 +91,212 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
   }
 
   void _forwardMessage(BuildContext context, String content) {
-    final conversations = ref.read(conversationsListProvider);
+    final searchController = TextEditingController();
+
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppTheme.surfaceLow,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Forward Message To...',
-              style: TextStyle(color: AppTheme.onSurface, fontWeight: FontWeight.bold, fontSize: 16),
-            ),
-            const SizedBox(height: 12),
-            if (conversations.isEmpty)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 16),
-                child: Text('No active conversations to forward to.', style: TextStyle(color: AppTheme.onSurfaceVariant)),
-              )
-            else
-              Flexible(
-                child: ListView(
-                  shrinkWrap: true,
-                  children: conversations.map((c) => ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(
-                      backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
-                      backgroundImage: getAvatarImageProvider(c.avatarUrl),
-                      child: c.avatarUrl.isEmpty
-                          ? Text(
-                              c.partnerName.isNotEmpty ? c.partnerName[0].toUpperCase() : 'P',
-                              style: const TextStyle(color: AppTheme.primaryContainer, fontWeight: FontWeight.bold),
-                            )
-                          : null,
-                    ),
-                    title: Text(c.partnerName, style: const TextStyle(color: AppTheme.onSurface, fontWeight: FontWeight.w600)),
-                    subtitle: Text(c.lastMessage, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.onSurfaceVariant, fontSize: 12)),
-                    onTap: () {
-                      ref.read(fellowshipChatProvider(c.id).notifier).sendMessage(content, isForwarded: true);
-                      Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Forwarded to ${c.partnerName}'),
-                          behavior: SnackBarBehavior.floating,
-                          backgroundColor: AppTheme.surfaceHigh,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (modalContext, setModalState) {
+            final conversations = ref.watch(conversationsListProvider);
+            final feedState = ref.watch(feedProvider);
+            final currentProfile = ref.watch(mockAuthNotifierProvider).profile;
+            final isKeyboardOpen = MediaQuery.of(ctx).viewInsets.bottom > 0;
+
+            return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              stream: ChatFirestoreService.searchUsers(searchController.text),
+              builder: (ctx, snapshot) {
+                final believersMap = <String, Map<String, String>>{}; // id -> {name, avatar}
+
+                // Add existing conversation partners first
+                for (final c in conversations) {
+                  if (c.id != currentProfile.id) {
+                    believersMap[c.id] = {
+                      'name': c.partnerName,
+                      'avatar': c.avatarUrl,
+                    };
+                  }
+                }
+
+                // Add live search results from Firestore
+                if (snapshot.hasData && snapshot.data != null) {
+                  for (final doc in snapshot.data!.docs) {
+                    if (doc.id == currentProfile.id) continue;
+                    final data = doc.data();
+                    believersMap.putIfAbsent(doc.id, () => {
+                      'name': (data['name'] ?? 'Believer').toString(),
+                      'avatar': (data['avatarUrl'] ?? '').toString(),
+                    });
+                  }
+                }
+
+                // Add feed authors fallback
+                for (final p in feedState.posts) {
+                  final pid = p.authorId.isNotEmpty ? p.authorId : p.authorName;
+                  if (p.authorName.isNotEmpty &&
+                      p.authorName.toLowerCase() != currentProfile.name.toLowerCase() &&
+                      pid.toLowerCase() != currentProfile.id.toLowerCase()) {
+                    believersMap.putIfAbsent(pid, () => {
+                      'name': p.authorName,
+                      'avatar': p.authorAvatar ?? '',
+                    });
+                  }
+                }
+
+                final filter = searchController.text.trim().toLowerCase();
+                final filteredBelievers = believersMap.entries.where((e) {
+                  if (filter.isEmpty) return true;
+                  return e.value['name']!.toLowerCase().contains(filter) || e.key.toLowerCase().contains(filter);
+                }).toList();
+
+                return Padding(
+                  padding: EdgeInsets.only(
+                    top: 20,
+                    left: 20,
+                    right: 20,
+                    bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+                  ),
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            decoration: BoxDecoration(
+                              color: AppTheme.emeraldStrokeAlpha25,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
                         ),
-                      );
-                    },
-                  )).toList(),
-                ),
-              ),
-          ],
-        ),
-      ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            const Icon(Icons.forward, color: AppTheme.primaryContainer, size: 22),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                'Forward Message To...',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.onSurface,
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        TextField(
+                          controller: searchController,
+                          autofocus: true,
+                          style: const TextStyle(fontSize: 14, color: AppTheme.onSurface),
+                          onChanged: (_) => setModalState(() {}),
+                          decoration: InputDecoration(
+                            hintText: 'Search believer e.g. Sister Deborah',
+                            hintStyle: const TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
+                            prefixIcon: const Icon(Icons.search, color: AppTheme.primaryContainer, size: 20),
+                            suffixIcon: searchController.text.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear, size: 18, color: AppTheme.onSurfaceVariant),
+                                    onPressed: () {
+                                      searchController.clear();
+                                      setModalState(() {});
+                                    },
+                                  )
+                                : null,
+                            filled: true,
+                            fillColor: AppTheme.surfaceLowest,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: const BorderSide(color: AppTheme.emeraldStrokeAlpha25),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        if (filteredBelievers.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 16),
+                            child: Center(
+                              child: Text('No believers found', style: TextStyle(color: AppTheme.onSurfaceVariant)),
+                            ),
+                          )
+                        else
+                          ConstrainedBox(
+                            constraints: BoxConstraints(maxHeight: isKeyboardOpen ? 140 : 220),
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              itemCount: filteredBelievers.length,
+                              separatorBuilder: (context, index) => const Divider(
+                                height: 1,
+                                color: AppTheme.emeraldStrokeAlpha15,
+                              ),
+                              itemBuilder: (context, index) {
+                                final item = filteredBelievers[index];
+                                final partnerId = item.key;
+                                final name = item.value['name'] ?? partnerId;
+                                final avatar = item.value['avatar'] ?? '';
+
+                                final avatarImg = getAvatarImageProvider(avatar);
+                                return ListTile(
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                  leading: CircleAvatar(
+                                    radius: 18,
+                                    backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
+                                    backgroundImage: avatarImg,
+                                    child: avatarImg == null
+                                        ? Text(
+                                            name.isNotEmpty ? name[0].toUpperCase() : 'P',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              color: AppTheme.primaryContainer,
+                                            ),
+                                          )
+                                        : null,
+                                  ),
+                                  title: Text(name, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.onSurface)),
+                                  trailing: ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppTheme.primaryContainer,
+                                      foregroundColor: AppTheme.onPrimary,
+                                      elevation: 0,
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    onPressed: () {
+                                      ref.read(fellowshipChatProvider(partnerId).notifier).sendMessage(content, isForwarded: true);
+                                      Navigator.pop(ctx);
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        SnackBar(
+                                          content: Text('Forwarded to $name'),
+                                          behavior: SnackBarBehavior.floating,
+                                          backgroundColor: AppTheme.surfaceHigh,
+                                        ),
+                                      );
+                                    },
+                                    child: const Text('Send', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 

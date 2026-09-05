@@ -46,6 +46,21 @@ class ChatFirestoreService {
     return targets.any((t) => t.trim() == cleanId);
   }
 
+  /// Stream registered users live from Firestore by name query
+  static Stream<QuerySnapshot<Map<String, dynamic>>> searchUsers(String query) {
+    final q = query.trim().toLowerCase();
+    if (q.isEmpty) {
+      return FirebaseFirestore.instance.collection('users').limit(20).snapshots();
+    }
+    return FirebaseFirestore.instance
+        .collection('users')
+        .orderBy('nameLower')
+        .startAt([q])
+        .endAt(['$q\uf8ff'])
+        .limit(20)
+        .snapshots();
+  }
+
   CollectionReference<Map<String, dynamic>>? get _chatsRef => _firestore?.collection('chats');
 
   /// Stream active conversations from Firestore strictly for current user UID

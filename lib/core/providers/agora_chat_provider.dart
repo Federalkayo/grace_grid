@@ -519,9 +519,17 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
   Future<void> deleteMessage(String messageId) async {
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
     final chatId = ChatFirestoreService.getChatId(authProfile.id, partnerId);
+    final previousMessages = state.messages;
     state = state.copyWith(messages: state.messages.where((m) => m.id != messageId).toList());
     ChatLocalCacheService().saveMessages(partnerId, state.messages);
-    await _firestoreService.deleteMessage(chatId: chatId, messageId: messageId);
+
+    try {
+      await _firestoreService.deleteMessage(chatId: chatId, messageId: messageId);
+    } catch (e) {
+      state = state.copyWith(messages: previousMessages);
+      ChatLocalCacheService().saveMessages(partnerId, previousMessages);
+      rethrow;
+    }
   }
 
   @override
