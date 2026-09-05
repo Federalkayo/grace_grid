@@ -97,6 +97,7 @@ class ChatLocalCacheService {
         'isDelivered': m.isDelivered,
         'isRead': m.isRead,
         'reactions': m.reactions,
+        'isForwarded': m.isForwarded,
       }).toList();
 
       await file.writeAsString(jsonEncode(listJson));
@@ -130,7 +131,8 @@ class ChatLocalCacheService {
           conversationId: json['conversationId']?.toString(),
           isDelivered: json['isDelivered'] ?? true,
           isRead: json['isRead'] ?? false,
-          reactions: List<String>.from(json['reactions'] ?? []),
+          reactions: Map<String, String>.from(json['reactions'] is Map ? json['reactions'] : {}),
+          isForwarded: json['isForwarded'] ?? false,
         );
       }).toList();
     } catch (e) {

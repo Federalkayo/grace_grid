@@ -740,15 +740,11 @@ class _FellowshipConversationsScreenState
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: FloatingActionButton(
         backgroundColor: AppTheme.primaryContainer,
         foregroundColor: AppTheme.onPrimary,
-        icon: const Icon(Icons.chat_bubble_outline),
-        label: const Text(
-          'New Fellowship Chat',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
         onPressed: () => _showStartNewChatDialog(context),
+        child: const Icon(Icons.chat_bubble_outline),
       ),
     );
   }

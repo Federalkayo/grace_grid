@@ -88,7 +88,69 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
     super.dispose();
   }
 
-  void _showReactionPicker(BuildContext context, String messageId) {
+  void _forwardMessage(BuildContext context, String content) {
+    final conversations = ref.read(conversationsListProvider);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surfaceLow,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Forward Message To...',
+              style: TextStyle(color: AppTheme.onSurface, fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 12),
+            if (conversations.isEmpty)
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 16),
+                child: Text('No active conversations to forward to.', style: TextStyle(color: AppTheme.onSurfaceVariant)),
+              )
+            else
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: conversations.map((c) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: CircleAvatar(
+                      backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
+                      backgroundImage: getAvatarImageProvider(c.avatarUrl),
+                      child: c.avatarUrl.isEmpty
+                          ? Text(
+                              c.partnerName.isNotEmpty ? c.partnerName[0].toUpperCase() : 'P',
+                              style: const TextStyle(color: AppTheme.primaryContainer, fontWeight: FontWeight.bold),
+                            )
+                          : null,
+                    ),
+                    title: Text(c.partnerName, style: const TextStyle(color: AppTheme.onSurface, fontWeight: FontWeight.w600)),
+                    subtitle: Text(c.lastMessage, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: AppTheme.onSurfaceVariant, fontSize: 12)),
+                    onTap: () {
+                      ref.read(fellowshipChatProvider(c.id).notifier).sendMessage(content, isForwarded: true);
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Forwarded to ${c.partnerName}'),
+                          behavior: SnackBarBehavior.floating,
+                          backgroundColor: AppTheme.surfaceHigh,
+                        ),
+                      );
+                    },
+                  )).toList(),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showMessageActions(BuildContext context, AgoraChatMessageData msg, bool isMe) {
     showModalBottomSheet(
       context: context,
       backgroundColor: AppTheme.surfaceLow,
@@ -107,7 +169,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
               children: ['❤️', '🙏', '👍', '🔥', '😂', '😮'].map((emoji) {
                 return GestureDetector(
                   onTap: () {
-                    ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).toggleReaction(messageId, emoji);
+                    ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).toggleReaction(msg.id, emoji);
                     Navigator.pop(ctx);
                   },
                   child: Container(
@@ -122,6 +184,26 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                 );
               }).toList(),
             ),
+            const SizedBox(height: 16),
+            const Divider(color: AppTheme.emeraldStrokeAlpha15, height: 1),
+            const SizedBox(height: 8),
+            ListTile(
+              leading: const Icon(Icons.forward, color: AppTheme.primaryContainer),
+              title: const Text('Forward Message', style: TextStyle(color: AppTheme.onSurface, fontSize: 14, fontWeight: FontWeight.w500)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _forwardMessage(context, msg.content);
+              },
+            ),
+            if (isMe)
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                title: const Text('Delete Message', style: TextStyle(color: Colors.redAccent, fontSize: 14, fontWeight: FontWeight.w500)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).deleteMessage(msg.id);
+                },
+              ),
           ],
         ),
       ),
@@ -287,75 +369,112 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                   alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-                    margin: const EdgeInsets.only(bottom: 12),
+                    margin: const EdgeInsets.only(bottom: 16),
                     child: GestureDetector(
-                      onLongPress: () => _showReactionPicker(context, msg.id),
-                      child: GlassCard(
-                        level: isMe ? GlassLevel.level2 : GlassLevel.level1,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        customSurfaceColor: isMe
-                            ? AppTheme.primaryContainer.withValues(alpha: 0.2)
-                            : AppTheme.surfaceLow.withValues(alpha: 0.8),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (!isMe)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 4.0),
-                                child: Text(
-                                  msg.senderName,
-                                  style: const TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: AppTheme.primaryContainer,
-                                  ),
-                                ),
-                              ),
-                            Text(
-                              msg.content,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: isMe ? AppTheme.primary : AppTheme.onSurface,
-                              ),
-                            ),
-                            if (msg.reactions.isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Wrap(
-                                spacing: 4,
-                                children: msg.reactions.map((r) => Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.surfaceLowest,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
-                                  ),
-                                  child: Text(r, style: const TextStyle(fontSize: 12)),
-                                )).toList(),
-                              ),
-                            ],
-                            const SizedBox(height: 4),
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              mainAxisAlignment: MainAxisAlignment.end,
+                      onLongPress: () => _showMessageActions(context, msg, isMe),
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          GlassCard(
+                            level: isMe ? GlassLevel.level2 : GlassLevel.level1,
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            customSurfaceColor: isMe
+                                ? AppTheme.primaryContainer.withValues(alpha: 0.2)
+                                : AppTheme.surfaceLow.withValues(alpha: 0.8),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(
-                                  msg.formattedTime,
-                                  style: const TextStyle(fontSize: 10, color: AppTheme.onSurfaceVariant),
-                                ),
-                                if (isMe) ...[
-                                  const SizedBox(width: 4),
-                                  Icon(
-                                    (msg.isRead || msg.isDelivered) ? Icons.done_all : Icons.done,
-                                    size: 15,
-                                    color: msg.isRead
-                                        ? AppTheme.primaryContainer
-                                        : AppTheme.onSurfaceVariant.withValues(alpha: 0.7),
+                                if (msg.isForwarded)
+                                  const Padding(
+                                    padding: EdgeInsets.only(bottom: 4),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(Icons.forward, size: 12, color: AppTheme.onSurfaceVariant),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          'Forwarded',
+                                          style: TextStyle(
+                                            fontSize: 10,
+                                            fontStyle: FontStyle.italic,
+                                            color: AppTheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ],
+                                if (!isMe)
+                                  Padding(
+                                    padding: const EdgeInsets.only(bottom: 4.0),
+                                    child: Text(
+                                      msg.senderName,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppTheme.primaryContainer,
+                                      ),
+                                    ),
+                                  ),
+                                Text(
+                                  msg.content,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: isMe ? AppTheme.primary : AppTheme.onSurface,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      msg.formattedTime,
+                                      style: const TextStyle(fontSize: 10, color: AppTheme.onSurfaceVariant),
+                                    ),
+                                    if (isMe) ...[
+                                      const SizedBox(width: 4),
+                                      Icon(
+                                        (msg.isRead || msg.isDelivered) ? Icons.done_all : Icons.done,
+                                        size: 15,
+                                        color: msg.isRead
+                                            ? AppTheme.primaryContainer
+                                            : AppTheme.onSurfaceVariant.withValues(alpha: 0.7),
+                                      ),
+                                    ],
+                                  ],
+                                ),
                               ],
                             ),
-                          ],
-                        ),
+                          ),
+                          if (msg.reactions.isNotEmpty)
+                            Positioned(
+                              bottom: -10,
+                              right: isMe ? 8 : null,
+                              left: isMe ? null : 8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.surfaceLowest,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.black.withValues(alpha: 0.2),
+                                      blurRadius: 4,
+                                      offset: const Offset(0, 2),
+                                    ),
+                                  ],
+                                ),
+                                child: Text(
+                                  msg.reactions.values.toSet().map((emoji) {
+                                    final count = msg.reactions.values.where((e) => e == emoji).length;
+                                    return count > 1 ? '$emoji $count' : emoji;
+                                  }).join(' '),
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ),
                   ),

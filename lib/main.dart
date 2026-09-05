@@ -5,7 +5,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'core/theme/app_theme.dart';
 import 'core/services/agora_chat_service.dart';
-import 'features/splash/book_flip_splash_screen.dart';
+import 'app_shell.dart';
 
 void main() async {
   WidgetsBinding widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
@@ -25,6 +25,9 @@ void main() async {
     debugPrint('AgoraChatService.initialize notice: $e');
   }
 
+  // Remove native splash screen as soon as async initialization finishes
+  FlutterNativeSplash.remove();
+
   runApp(
     const ProviderScope(
       child: GraceGridApp(),
@@ -41,7 +44,8 @@ class GraceGridApp extends StatelessWidget {
       title: 'GraceGrid Sanctuary',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.darkTheme,
-      home: const BookFlipSplashScreen(),
+      home: const AppShell(),
     );
   }
 }
+

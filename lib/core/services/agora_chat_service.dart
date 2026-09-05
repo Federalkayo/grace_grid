@@ -18,7 +18,8 @@ class AgoraChatMessageData {
   final String? conversationId;
   final bool isDelivered;
   final bool isRead;
-  final List<String> reactions;
+  final Map<String, String> reactions; // userId -> emoji
+  final bool isForwarded;
 
   const AgoraChatMessageData({
     required this.id,
@@ -30,7 +31,8 @@ class AgoraChatMessageData {
     this.conversationId,
     this.isDelivered = true,
     this.isRead = false,
-    this.reactions = const [],
+    this.reactions = const {},
+    this.isForwarded = false,
   });
 
   AgoraChatMessageData copyWith({
@@ -43,7 +45,8 @@ class AgoraChatMessageData {
     String? conversationId,
     bool? isDelivered,
     bool? isRead,
-    List<String>? reactions,
+    Map<String, String>? reactions,
+    bool? isForwarded,
   }) {
     return AgoraChatMessageData(
       id: id ?? this.id,
@@ -56,6 +59,7 @@ class AgoraChatMessageData {
       isDelivered: isDelivered ?? this.isDelivered,
       isRead: isRead ?? this.isRead,
       reactions: reactions ?? this.reactions,
+      isForwarded: isForwarded ?? this.isForwarded,
     );
   }
 

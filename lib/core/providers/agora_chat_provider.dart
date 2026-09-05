@@ -445,7 +445,7 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
     await _service.sendTypingSignal(partnerId, isTyping);
   }
 
-  Future<void> sendMessage(String text, {String? senderId, String senderName = 'You', String recipientName = ''}) async {
+  Future<void> sendMessage(String text, {String? senderId, String senderName = 'You', String recipientName = '', bool isForwarded = false}) async {
     if (text.trim().isEmpty) return;
     await sendTypingSignal(false);
 
@@ -470,12 +470,13 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
       content: text.trim(),
       senderAvatar: authProfile.avatarUrl,
       messageId: msgId,
+      isForwarded: isForwarded,
     );
 
     final exists = state.messages.any((m) => m.id == msgId || m.id == sentData.id);
     if (!exists) {
       state = state.copyWith(
-        messages: [...state.messages, sentData.copyWith(id: msgId)],
+        messages: [...state.messages, sentData.copyWith(id: msgId, isForwarded: isForwarded)],
       );
       ChatLocalCacheService().saveMessages(partnerId, state.messages);
     }
@@ -494,20 +495,33 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
 
     final updatedMessages = state.messages.map((m) {
       if (m.id == messageId) {
-        final currentReactions = List<String>.from(m.reactions);
-        if (currentReactions.contains(emoji)) {
-          currentReactions.remove(emoji);
+        final reactions = Map<String, String>.from(m.reactions);
+        if (reactions[authProfile.id] == emoji) {
+          reactions.remove(authProfile.id);
         } else {
-          currentReactions.add(emoji);
+          reactions[authProfile.id] = emoji;
         }
-        return m.copyWith(reactions: currentReactions);
+        return m.copyWith(reactions: reactions);
       }
       return m;
     }).toList();
     state = state.copyWith(messages: updatedMessages);
     ChatLocalCacheService().saveMessages(partnerId, updatedMessages);
 
-    _firestoreService.toggleReaction(chatId: chatId, messageId: messageId, emoji: emoji);
+    _firestoreService.toggleReaction(
+      chatId: chatId,
+      messageId: messageId,
+      userId: authProfile.id,
+      emoji: emoji,
+    );
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    final authProfile = ref.read(mockAuthNotifierProvider).profile;
+    final chatId = ChatFirestoreService.getChatId(authProfile.id, partnerId);
+    state = state.copyWith(messages: state.messages.where((m) => m.id != messageId).toList());
+    ChatLocalCacheService().saveMessages(partnerId, state.messages);
+    await _firestoreService.deleteMessage(chatId: chatId, messageId: messageId);
   }
 
   @override

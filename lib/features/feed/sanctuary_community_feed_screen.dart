@@ -250,14 +250,9 @@ class _SanctuaryCommunityFeedScreenState extends ConsumerState<SanctuaryCommunit
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
+      floatingActionButton: FloatingActionButton(
         backgroundColor: AppTheme.primaryContainer,
         foregroundColor: AppTheme.onPrimary,
-        icon: const Icon(Icons.edit_note, size: 22),
-        label: const Text(
-          'Post Testimony',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
         onPressed: () => _handleProtectedAction(
           actionTitle: 'post in Community',
           onAuthenticated: () {
@@ -268,6 +263,7 @@ class _SanctuaryCommunityFeedScreenState extends ConsumerState<SanctuaryCommunit
             );
           },
         ),
+        child: const Icon(Icons.edit_note, size: 24),
       ),
       body: RefreshIndicator(
         onRefresh: () async {

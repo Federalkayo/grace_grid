@@ -118,7 +118,8 @@ class ChatFirestoreService {
           conversationId: chatId,
           isDelivered: data['isDelivered'] ?? true,
           isRead: data['isRead'] ?? false,
-          reactions: List<String>.from(data['reactions'] ?? []),
+          reactions: Map<String, String>.from(data['reactions'] is Map ? data['reactions'] : {}),
+          isForwarded: data['isForwarded'] ?? false,
         );
       }).toList();
     });
@@ -134,6 +135,7 @@ class ChatFirestoreService {
     String senderAvatar = '',
     String recipientAvatar = '',
     String? messageId,
+    bool isForwarded = false,
   }) async {
     try {
       final db = _firestore;
@@ -157,7 +159,8 @@ class ChatFirestoreService {
         'timestamp': FieldValue.serverTimestamp(),
         'isDelivered': true,
         'isRead': false,
-        'reactions': <String>[],
+        'reactions': <String, String>{},
+        'isForwarded': isForwarded,
       });
 
       // Update parent chat doc keying partnerNames and partnerAvatars by UID
@@ -189,6 +192,7 @@ class ChatFirestoreService {
   Future<void> toggleReaction({
     required String chatId,
     required String messageId,
+    required String userId,
     required String emoji,
   }) async {
     try {
@@ -199,17 +203,30 @@ class ChatFirestoreService {
       final snapshot = await msgDocRef.get();
       if (!snapshot.exists) return;
 
-      final data = snapshot.data();
-      final currentReactions = List<String>.from(data?['reactions'] ?? []);
-      if (currentReactions.contains(emoji)) {
-        currentReactions.remove(emoji);
+      final reactions = Map<String, String>.from(snapshot.data()?['reactions'] is Map ? snapshot.data()!['reactions'] : {});
+      if (reactions[userId] == emoji) {
+        reactions.remove(userId);
       } else {
-        currentReactions.add(emoji);
+        reactions[userId] = emoji;
       }
 
-      await msgDocRef.update({'reactions': currentReactions});
+      await msgDocRef.update({'reactions': reactions});
     } catch (e) {
       debugPrint('Firestore toggleReaction error: $e');
+    }
+  }
+
+  /// Delete a message document from Firestore
+  Future<void> deleteMessage({
+    required String chatId,
+    required String messageId,
+  }) async {
+    try {
+      final ref = _chatsRef;
+      if (ref == null) return;
+      await ref.doc(chatId).collection('messages').doc(messageId).delete();
+    } catch (e) {
+      debugPrint('Firestore deleteMessage error: $e');
     }
   }
 
