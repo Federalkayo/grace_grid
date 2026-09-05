@@ -16,7 +16,7 @@ class ChatFirestoreService {
     }
   }
 
-  /// Clean and normalize handle/name token for deterministic chat IDs
+  /// Clean and normalize handle/name token for fallback legacy compatibility
   static String cleanHandle(String handle) {
     var clean = handle.trim().toLowerCase();
     for (final prefix in ['pastor ', 'sister ', 'brother ', 'evangelist ', 'deacon ']) {
@@ -30,75 +30,41 @@ class ChatFirestoreService {
     return clean;
   }
 
-  /// Generate deterministic 1:1 chat ID between two handles/IDs
-  static String getChatId(String user1, String user2) {
-    final u1 = cleanHandle(user1);
-    final u2 = cleanHandle(user2);
+  /// Generate deterministic 1:1 chat ID between two user IDs/UIDs
+  static String getChatId(String uid1, String uid2) {
+    final u1 = uid1.trim();
+    final u2 = uid2.trim();
     if (u1 == u2) return u1;
     final list = [u1, u2]..sort();
     return '${list[0]}_${list[1]}';
   }
 
-  /// Helper to check if a user (id or name) matches any target in a list of participants
-  static bool isParticipantMatch(String userId, String userName, List<String> targets) {
-    final cleanId = userId.trim().toLowerCase();
-    final cleanName = userName.trim().toLowerCase();
-    if (cleanId.isEmpty && cleanName.isEmpty) return false;
-
-    for (final rawTarget in targets) {
-      final t = rawTarget.trim().toLowerCase();
-      if (t.isEmpty) continue;
-
-      // Direct equality or containment
-      if (cleanId.isNotEmpty && (t == cleanId || t.contains(cleanId) || cleanId.contains(t))) {
-        return true;
-      }
-      if (cleanName.isNotEmpty && (t == cleanName || t.contains(cleanName) || cleanName.contains(t))) {
-        return true;
-      }
-
-      // Word token matching (e.g. 'kayode' matches 'kayode koko')
-      if (cleanName.isNotEmpty) {
-        final tWords = t.split(RegExp(r'[\s_.-]+'));
-        final uWords = cleanName.split(RegExp(r'[\s_.-]+'));
-        for (final w1 in tWords) {
-          if (w1.length >= 2) {
-            for (final w2 in uWords) {
-              if (w2.length >= 2 && (w1 == w2 || w1.contains(w2) || w2.contains(w1))) {
-                return true;
-              }
-            }
-          }
-        }
-      }
-    }
-
-    return false;
+  /// Helper to check if current user ID matches any target in a list of participants
+  static bool isParticipantMatch(String userId, List<String> targets) {
+    final cleanId = userId.trim();
+    if (cleanId.isEmpty) return false;
+    return targets.any((t) => t.trim() == cleanId);
   }
 
   CollectionReference<Map<String, dynamic>>? get _chatsRef => _firestore?.collection('chats');
 
-  /// Stream active conversations from Firestore strictly for current user
-  Stream<List<Map<String, dynamic>>> getConversationsStream(String currentUserId, {String currentUserName = ''}) {
+  /// Stream active conversations from Firestore strictly for current user UID
+  Stream<List<Map<String, dynamic>>> getConversationsStream(String currentUserId) {
     final ref = _chatsRef;
-    if (ref == null) return const Stream.empty();
+    final cleanId = currentUserId.trim();
+    if (ref == null || cleanId.isEmpty) return const Stream.empty();
 
     return ref.snapshots().map((snapshot) {
       final list = <Map<String, dynamic>>[];
       for (final doc in snapshot.docs) {
         final data = doc.data();
         final participants = List<String>.from(data['participants'] ?? [])
-            .map((p) => p.trim().toLowerCase())
+            .map((p) => p.trim())
             .where((p) => p.isNotEmpty)
             .toList();
 
-        final docIdParts = doc.id.toLowerCase().split('_');
-        final allTargets = [...participants, ...docIdParts];
-
-        // STRICT MATCH: Check if current user is a participant
-        final isParticipant = isParticipantMatch(currentUserId, currentUserName, allTargets);
-
-        if (isParticipant) {
+        // Exact match on UID or fallback ID
+        if (participants.contains(cleanId)) {
           list.add({
             'id': doc.id,
             ...data,
@@ -115,12 +81,11 @@ class ChatFirestoreService {
   }
 
   /// Stream direct messages for a specific chat ID
-  Stream<List<AgoraChatMessageData>> getMessagesStream(String chatId, String currentUserId, {String currentUserName = ''}) {
+  Stream<List<AgoraChatMessageData>> getMessagesStream(String chatId, String currentUserId) {
     final ref = _chatsRef;
     if (ref == null) return const Stream.empty();
 
-    final cleanCurrentId = currentUserId.trim().toLowerCase();
-    final cleanCurrentName = currentUserName.trim().toLowerCase();
+    final cleanCurrentId = currentUserId.trim();
 
     return ref
         .doc(chatId)
@@ -130,12 +95,10 @@ class ChatFirestoreService {
         .map((snapshot) {
       return snapshot.docs.map((doc) {
         final data = doc.data();
-        final senderId = (data['senderId'] ?? '').toString();
+        final senderId = (data['senderId'] ?? '').toString().trim();
         final senderName = (data['senderName'] ?? '').toString();
 
-        final isMe = (cleanCurrentId.isNotEmpty && (senderId.toLowerCase() == cleanCurrentId || cleanCurrentId.contains(senderId.toLowerCase()))) ||
-                     (cleanCurrentName.isNotEmpty && (senderName.toLowerCase() == cleanCurrentName || cleanCurrentName.contains(senderName.toLowerCase()) || senderName.toLowerCase().contains(cleanCurrentName))) ||
-                     (data['isMe'] == true && senderId == 'user_me');
+        final isMe = cleanCurrentId.isNotEmpty && senderId == cleanCurrentId;
 
         final timestampVal = data['timestamp'];
         DateTime dt = DateTime.now();
@@ -161,57 +124,58 @@ class ChatFirestoreService {
     });
   }
 
-  /// Send direct message and persist to Firestore
+  /// Send direct message and persist to Firestore using UIDs and consistent message IDs
   Future<void> sendMessage({
     required String senderId,
     required String senderName,
+    required String recipientId,
     required String recipientName,
     required String content,
     String senderAvatar = '',
     String recipientAvatar = '',
+    String? messageId,
   }) async {
     try {
       final db = _firestore;
       final ref = _chatsRef;
       if (db == null || ref == null) return;
 
-      final chatId = getChatId(senderId.isNotEmpty ? senderId : senderName, recipientName);
-
+      final chatId = getChatId(senderId, recipientId);
       final chatDocRef = ref.doc(chatId);
-      final msgDocRef = chatDocRef.collection('messages').doc();
+      final msgId = messageId ?? 'msg_${DateTime.now().millisecondsSinceEpoch}';
+      final msgDocRef = chatDocRef.collection('messages').doc(msgId);
 
       final batch = db.batch();
 
-      // Write message doc
+      // Write message doc - NO stored isMe boolean
       batch.set(msgDocRef, {
         'senderId': senderId,
         'senderName': senderName,
+        'recipientId': recipientId,
         'recipientName': recipientName,
         'content': content.trim(),
         'timestamp': FieldValue.serverTimestamp(),
-        'isMe': true,
         'isDelivered': true,
         'isRead': false,
         'reactions': <String>[],
       });
 
-      // Update parent chat doc
+      // Update parent chat doc keying partnerNames and partnerAvatars by UID
       batch.set(chatDocRef, {
-        'participants': [senderId.toLowerCase(), senderName.toLowerCase(), recipientName.toLowerCase()],
+        'participants': [senderId, recipientId],
         'lastSenderId': senderId,
         'lastSenderName': senderName,
+        'lastRecipientId': recipientId,
         'lastRecipientName': recipientName,
         'lastMessage': content.trim(),
         'updatedAt': FieldValue.serverTimestamp(),
         'partnerAvatars': {
-          senderName.toLowerCase(): senderAvatar,
-          recipientName.toLowerCase(): recipientAvatar,
-          senderId.toLowerCase(): senderAvatar,
+          senderId: senderAvatar,
+          recipientId: recipientAvatar,
         },
         'partnerNames': {
-          senderId.toLowerCase(): senderName,
-          senderName.toLowerCase(): senderName,
-          recipientName.toLowerCase(): recipientName,
+          senderId: senderName,
+          recipientId: recipientName,
         },
       }, SetOptions(merge: true));
 
@@ -259,16 +223,15 @@ class ChatFirestoreService {
       if (ref == null) return;
 
       final messagesQuery = await ref.doc(chatId).collection('messages').where('isRead', isEqualTo: false).get();
-      final cleanUser = currentUserId.trim().toLowerCase();
+      final cleanUser = currentUserId.trim();
 
       final batch = _firestore?.batch();
       if (batch == null) return;
 
       int updatedCount = 0;
       for (final doc in messagesQuery.docs) {
-        final senderId = (doc.data()['senderId'] ?? '').toString().toLowerCase();
-        final senderName = (doc.data()['senderName'] ?? '').toString().toLowerCase();
-        if (senderId != cleanUser && senderName != cleanUser) {
+        final senderId = (doc.data()['senderId'] ?? '').toString().trim();
+        if (senderId != cleanUser) {
           batch.update(doc.reference, {'isRead': true});
           updatedCount++;
         }

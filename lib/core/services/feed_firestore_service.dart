@@ -43,24 +43,6 @@ class FeedFirestoreService {
     }
   }
 
-  /// Increment Amen on a post (allows clicking multiple times)
-  Future<void> incrementAmen({
-    required String postId,
-    required String userId,
-  }) async {
-    try {
-      final ref = _postsRef;
-      if (ref == null) return;
-      final docRef = ref.doc(postId);
-      await docRef.update({
-        'amenCount': FieldValue.increment(1),
-        'likedUserIds': FieldValue.arrayUnion([userId]),
-      });
-    } catch (e) {
-      debugPrint('Firestore incrementAmen error: $e');
-    }
-  }
-
   /// Toggle Amen (like) on a post
   Future<void> toggleAmen({
     required String postId,

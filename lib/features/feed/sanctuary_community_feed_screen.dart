@@ -39,7 +39,7 @@ class _SanctuaryCommunityFeedScreenState extends ConsumerState<SanctuaryCommunit
 
   void _triggerDoubleTapLike(FeedPost post) {
     setState(() => _animatingHeartMap[post.id] = true);
-    ref.read(feedProvider.notifier).incrementAmen(post.id);
+    ref.read(feedProvider.notifier).toggleAmen(post.id);
 
     Future.delayed(const Duration(milliseconds: 900), () {
       if (mounted) {
@@ -501,10 +501,19 @@ SizedBox(
                               onTap: isMyPost
                                   ? null
                                   : () {
-                                      ref.read(conversationsListProvider.notifier).addConversation(post.authorName);
+                                      final targetId = post.authorId.isNotEmpty ? post.authorId : post.authorName;
+                                      ref.read(conversationsListProvider.notifier).addConversation(
+                                        targetId,
+                                        partnerName: post.authorName,
+                                        avatarUrl: post.authorAvatar ?? '',
+                                      );
                                       Navigator.of(context).push(
                                         MaterialPageRoute(
-                                          builder: (context) => FellowshipChatScreen(partnerName: post.authorName),
+                                          builder: (context) => FellowshipChatScreen(
+                                            partnerId: targetId,
+                                            partnerName: post.authorName,
+                                            partnerAvatar: post.authorAvatar ?? '',
+                                          ),
                                         ),
                                       );
                                     },
@@ -537,12 +546,21 @@ SizedBox(
                                 onTap: isMyPost
                                     ? null
                                     : () {
-                                        ref.read(conversationsListProvider.notifier).addConversation(post.authorName);
-                                        Navigator.of(context).push(
-                                          MaterialPageRoute(
-                                            builder: (context) => FellowshipChatScreen(partnerName: post.authorName),
-                                          ),
-                                        );
+                                         final targetId = post.authorId.isNotEmpty ? post.authorId : post.authorName;
+                                         ref.read(conversationsListProvider.notifier).addConversation(
+                                           targetId,
+                                           partnerName: post.authorName,
+                                           avatarUrl: post.authorAvatar ?? '',
+                                         );
+                                         Navigator.of(context).push(
+                                           MaterialPageRoute(
+                                             builder: (context) => FellowshipChatScreen(
+                                               partnerId: targetId,
+                                               partnerName: post.authorName,
+                                               partnerAvatar: post.authorAvatar ?? '',
+                                             ),
+                                           ),
+                                         );
                                       },
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -570,10 +588,19 @@ SizedBox(
                                 icon: const Icon(Icons.chat_bubble_outline, size: 18, color: AppTheme.primaryContainer),
                                 tooltip: 'Message ${post.authorName}',
                                 onPressed: () {
-                                  ref.read(conversationsListProvider.notifier).addConversation(post.authorName);
+                                  final targetId = post.authorId.isNotEmpty ? post.authorId : post.authorName;
+                                  ref.read(conversationsListProvider.notifier).addConversation(
+                                    targetId,
+                                    partnerName: post.authorName,
+                                    avatarUrl: post.authorAvatar ?? '',
+                                  );
                                   Navigator.of(context).push(
                                     MaterialPageRoute(
-                                      builder: (context) => FellowshipChatScreen(partnerName: post.authorName),
+                                      builder: (context) => FellowshipChatScreen(
+                                        partnerId: targetId,
+                                        partnerName: post.authorName,
+                                        partnerAvatar: post.authorAvatar ?? '',
+                                      ),
                                     ),
                                   );
                                 },
@@ -695,7 +722,7 @@ SizedBox(
                               onTap: () => _handleProtectedAction(
                                 actionTitle: 'say Amen to posts',
                                 onAuthenticated: () {
-                                  ref.read(feedProvider.notifier).incrementAmen(post.id);
+                                  ref.read(feedProvider.notifier).toggleAmen(post.id);
                                 },
                               ),
                             ),

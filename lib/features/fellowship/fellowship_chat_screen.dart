@@ -11,11 +11,15 @@ import 'voice_prayer_call_screen.dart';
 import 'video_fellowship_call_screen.dart';
 
 class FellowshipChatScreen extends ConsumerStatefulWidget {
+  final String partnerId;
   final String partnerName;
+  final String partnerAvatar;
 
   const FellowshipChatScreen({
     super.key,
+    this.partnerId = 'user_kaleb',
     this.partnerName = 'Pastor Kaleb',
+    this.partnerAvatar = '',
   });
 
   @override
@@ -27,6 +31,9 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
   final ScrollController _scrollController = ScrollController();
   Timer? _typingTimer;
 
+  String get _effectivePartnerId => widget.partnerId.isNotEmpty ? widget.partnerId : widget.partnerName;
+  String get _effectivePartnerName => widget.partnerName.isNotEmpty ? widget.partnerName : widget.partnerId;
+
   @override
   void initState() {
     super.initState();
@@ -36,10 +43,10 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
   void _onTextChanged() {
     final text = _msgController.text;
     if (text.isNotEmpty) {
-      ref.read(fellowshipChatProvider(widget.partnerName).notifier).sendTypingSignal(true);
+      ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).sendTypingSignal(true);
       _typingTimer?.cancel();
       _typingTimer = Timer(const Duration(milliseconds: 1500), () {
-        ref.read(fellowshipChatProvider(widget.partnerName).notifier).sendTypingSignal(false);
+        ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).sendTypingSignal(false);
       });
     }
   }
@@ -50,10 +57,11 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
 
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
     _typingTimer?.cancel();
-    ref.read(fellowshipChatProvider(widget.partnerName).notifier).sendMessage(
+    ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).sendMessage(
       text,
       senderId: authProfile.id,
       senderName: authProfile.name,
+      recipientName: _effectivePartnerName,
     );
     _msgController.clear();
     _scrollToBottom();
@@ -99,7 +107,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
               children: ['❤️', '🙏', '👍', '🔥', '😂', '😮'].map((emoji) {
                 return GestureDetector(
                   onTap: () {
-                    ref.read(fellowshipChatProvider(widget.partnerName).notifier).toggleReaction(messageId, emoji);
+                    ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).toggleReaction(messageId, emoji);
                     Navigator.pop(ctx);
                   },
                   child: Container(
@@ -122,24 +130,26 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final chatState = ref.watch(fellowshipChatProvider(widget.partnerName));
+    final chatState = ref.watch(fellowshipChatProvider(_effectivePartnerId));
     final connStatus = ref.watch(agoraConnectionStatusProvider).value ?? AgoraConnectionStatus.demoMode;
     final authProfile = ref.watch(mockAuthNotifierProvider).profile;
     final conversations = ref.watch(conversationsListProvider);
     final feedState = ref.watch(feedProvider);
 
-    String partnerAvatarUrl = '';
-    for (final c in conversations) {
-      if (c.partnerName.toLowerCase() == widget.partnerName.toLowerCase() || c.id.toLowerCase() == widget.partnerName.toLowerCase()) {
-        if (c.avatarUrl.isNotEmpty) {
-          partnerAvatarUrl = c.avatarUrl;
-          break;
+    String partnerAvatarUrl = widget.partnerAvatar;
+    if (partnerAvatarUrl.isEmpty) {
+      for (final c in conversations) {
+        if (c.id == _effectivePartnerId || c.partnerName.toLowerCase() == _effectivePartnerName.toLowerCase()) {
+          if (c.avatarUrl.isNotEmpty) {
+            partnerAvatarUrl = c.avatarUrl;
+            break;
+          }
         }
       }
     }
     if (partnerAvatarUrl.isEmpty) {
       for (final p in feedState.posts) {
-        if (p.authorName.toLowerCase() == widget.partnerName.toLowerCase() && (p.authorAvatar ?? '').isNotEmpty) {
+        if ((p.authorId == _effectivePartnerId || p.authorName.toLowerCase() == _effectivePartnerName.toLowerCase()) && (p.authorAvatar ?? '').isNotEmpty) {
           partnerAvatarUrl = p.authorAvatar!;
           break;
         }
@@ -173,7 +183,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
               backgroundImage: partnerAvatarImg,
               child: partnerAvatarImg == null
                   ? Text(
-                      widget.partnerName.isNotEmpty ? widget.partnerName[0].toUpperCase() : 'P',
+                      _effectivePartnerName.isNotEmpty ? _effectivePartnerName[0].toUpperCase() : 'P',
                       style: const TextStyle(color: AppTheme.primaryContainer, fontWeight: FontWeight.bold),
                     )
                   : null,
@@ -184,7 +194,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    widget.partnerName,
+                    _effectivePartnerName,
                     style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.onSurface),
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -223,7 +233,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) => VoicePrayerCallScreen(partnerName: widget.partnerName),
+                  builder: (context) => VoicePrayerCallScreen(partnerName: _effectivePartnerName),
                 ),
               );
             },
@@ -235,7 +245,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) => VideoFellowshipCallScreen(partnerName: widget.partnerName),
+                  builder: (context) => VideoFellowshipCallScreen(partnerName: _effectivePartnerName),
                 ),
               );
             },
@@ -372,7 +382,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      '${widget.partnerName} is typing...',
+                      '$_effectivePartnerName is typing...',
                       style: const TextStyle(
                         fontSize: 12,
                         fontStyle: FontStyle.italic,

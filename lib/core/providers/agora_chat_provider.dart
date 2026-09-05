@@ -107,12 +107,11 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
 
   void _subscribeFirestore(String userId, String userName) {
     _firestoreSub?.cancel();
-    final cleanSubUserId = userId.trim().toLowerCase();
+    final cleanSubUserId = userId.trim();
 
-    _firestoreSub = _firestoreService.getConversationsStream(userId, currentUserName: userName).listen((docs) {
+    _firestoreSub = _firestoreService.getConversationsStream(userId).listen((docs) {
       final currentProfile = ref.read(mockAuthNotifierProvider).profile;
-      final currentName = currentProfile.name.toLowerCase();
-      final currentId = currentProfile.id.toLowerCase();
+      final currentId = currentProfile.id;
 
       // Ensure stream hasn't been outdistanced by a fast user account switch
       if (cleanSubUserId.isNotEmpty && currentId.isNotEmpty && cleanSubUserId != currentId) {
@@ -122,78 +121,47 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
       final firestoreItems = <ConversationItem>[];
       for (final data in docs) {
         final participants = List<String>.from(data['participants'] ?? [])
-            .map((p) => p.trim().toLowerCase())
+            .map((p) => p.trim())
             .toList();
-        final lastSenderName = (data['lastSenderName'] ?? '').toString();
-        final lastSenderId = (data['lastSenderId'] ?? '').toString();
-        final lastRecipientName = (data['lastRecipientName'] ?? '').toString();
 
-        final docIdParts = (data['id'] ?? '').toString().toLowerCase().split('_');
-        final allTargets = [...participants, ...docIdParts];
-
-        final isMeParticipant = ChatFirestoreService.isParticipantMatch(currentId, currentName, allTargets);
-
-        if (!isMeParticipant) {
-          continue; // Strict safety check: Skip non-matching user chats
+        if (!participants.contains(currentId)) {
+          continue; // Skip non-matching user chats
         }
 
-        String partner = '';
-
-        // 1. Find participant that is NOT current user
+        String partnerId = '';
         for (final p in participants) {
-          final pClean = p.trim().toLowerCase();
-          if (pClean.isNotEmpty && pClean != currentName && pClean != currentId && pClean != 'user_me' && pClean != 'you') {
-            partner = p;
+          if (p.isNotEmpty && p != currentId) {
+            partnerId = p;
             break;
           }
         }
 
-        // 2. Check lastSender and lastRecipient names
-        if (partner.isEmpty || partner.toLowerCase() == currentName || partner.toLowerCase() == currentId) {
-          if (lastSenderName.isNotEmpty && lastSenderName.toLowerCase() != currentName && lastSenderName.toLowerCase() != currentId) {
-            partner = lastSenderName;
-          } else if (lastSenderId.isNotEmpty && lastSenderId.toLowerCase() != currentName && lastSenderId.toLowerCase() != currentId) {
-            partner = lastSenderId;
-          } else if (lastRecipientName.isNotEmpty && lastRecipientName.toLowerCase() != currentName && lastRecipientName.toLowerCase() != currentId) {
-            partner = lastRecipientName;
-          }
-        }
-
-        // 3. Check document ID (e.g. kayode_koko)
-        if (partner.isEmpty || partner.toLowerCase() == currentName || partner.toLowerCase() == currentId) {
-          for (final pt in docIdParts) {
-            final ptClean = pt.trim().toLowerCase();
-            if (ptClean.isNotEmpty && ptClean != currentName && ptClean != currentId && ptClean != 'user_me' && ptClean != 'you') {
-              partner = pt;
-              break;
-            }
-          }
-        }
-
-        if (partner.isEmpty || partner.toLowerCase() == currentName || partner.toLowerCase() == currentId) {
+        if (partnerId.isEmpty) {
           continue; // Skip self-chat doc
         }
 
         final partnerNames = Map<String, dynamic>.from(data['partnerNames'] ?? {});
         final avatars = Map<String, dynamic>.from(data['partnerAvatars'] ?? {});
 
-        String partnerDisplayName = (partnerNames[partner.toLowerCase()] ?? partnerNames[partner] ?? '').toString();
+        String partnerDisplayName = (partnerNames[partnerId] ?? '').toString();
         if (partnerDisplayName.isEmpty) {
-          if (lastSenderId.isNotEmpty && lastSenderId.toLowerCase() == partner.toLowerCase() && lastSenderName.isNotEmpty) {
+          final lastSenderId = (data['lastSenderId'] ?? '').toString();
+          final lastSenderName = (data['lastSenderName'] ?? '').toString();
+          final lastRecipientName = (data['lastRecipientName'] ?? '').toString();
+          if (lastSenderId == partnerId && lastSenderName.isNotEmpty) {
             partnerDisplayName = lastSenderName;
-          } else if (lastRecipientName.isNotEmpty && partner.toLowerCase() != currentName) {
+          } else if (lastRecipientName.isNotEmpty) {
             partnerDisplayName = lastRecipientName;
+          } else {
+            partnerDisplayName = partnerId;
           }
-        }
-        if (partnerDisplayName.isEmpty) {
-          partnerDisplayName = partner;
         }
 
         final formattedPartner = partnerDisplayName.length > 1 && !partnerDisplayName.startsWith('Gs')
             ? partnerDisplayName[0].toUpperCase() + partnerDisplayName.substring(1)
             : partnerDisplayName;
 
-        final avatarUrl = (avatars[partner.toLowerCase()] ?? avatars[partnerDisplayName.toLowerCase()] ?? avatars[partner] ?? '').toString();
+        final avatarUrl = (avatars[partnerId] ?? '').toString();
 
         final updatedAtVal = data['updatedAt'];
         String timeAgoStr = 'Just now';
@@ -208,7 +176,7 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
         }
 
         firestoreItems.add(ConversationItem(
-          id: partner,
+          id: partnerId,
           partnerName: formattedPartner,
           avatarUrl: avatarUrl,
           lastMessage: (data['lastMessage'] ?? '').toString(),
@@ -312,14 +280,15 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
     _saveLocalCache();
   }
 
-  void addConversation(String partnerName, {String avatarUrl = ''}) {
-    final cleanName = partnerName.trim();
-    if (cleanName.isEmpty) return;
+  void addConversation(String partnerId, {String partnerName = '', String avatarUrl = ''}) {
+    final cleanId = partnerId.trim();
+    if (cleanId.isEmpty) return;
+    final cleanName = partnerName.isNotEmpty ? partnerName : cleanId;
 
-    final exists = state.any((item) => item.partnerName.toLowerCase() == cleanName.toLowerCase() || item.id.toLowerCase() == cleanName.toLowerCase());
+    final exists = state.any((item) => item.id == cleanId);
     if (!exists) {
       final newItem = ConversationItem(
-        id: cleanName,
+        id: cleanId,
         partnerName: cleanName,
         avatarUrl: avatarUrl,
         lastMessage: 'Tap to start direct prayer fellowship...',
@@ -328,10 +297,13 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
         isOnline: true,
       );
       state = [newItem, ...state];
-    } else if (avatarUrl.isNotEmpty) {
+    } else if (avatarUrl.isNotEmpty || partnerName.isNotEmpty) {
       state = state.map((item) {
-        if (item.partnerName.toLowerCase() == cleanName.toLowerCase() || item.id.toLowerCase() == cleanName.toLowerCase()) {
-          return item.copyWith(avatarUrl: avatarUrl);
+        if (item.id == cleanId) {
+          return item.copyWith(
+            partnerName: partnerName.isNotEmpty ? partnerName : item.partnerName,
+            avatarUrl: avatarUrl.isNotEmpty ? avatarUrl : item.avatarUrl,
+          );
         }
         return item;
       }).toList();
@@ -404,10 +376,10 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
 
   void _initListeners() {
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
-    final chatId = ChatFirestoreService.getChatId(authProfile.name, partnerId);
+    final chatId = ChatFirestoreService.getChatId(authProfile.id, partnerId);
 
     // Stream past and live messages from Cloud Firestore
-    _firestoreMsgSub = _firestoreService.getMessagesStream(chatId, authProfile.id, currentUserName: authProfile.name).listen((firestoreMsgs) {
+    _firestoreMsgSub = _firestoreService.getMessagesStream(chatId, authProfile.id).listen((firestoreMsgs) {
       if (firestoreMsgs.isNotEmpty) {
         state = state.copyWith(messages: firestoreMsgs);
         ChatLocalCacheService().saveMessages(partnerId, firestoreMsgs);
@@ -415,7 +387,7 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
     });
 
     _msgSub = _service.incomingMessages.listen((msg) {
-      final isTarget = (msg.conversationId == partnerId || msg.senderId == partnerId || msg.senderName.toLowerCase() == partnerId.toLowerCase());
+      final isTarget = (msg.conversationId == partnerId || msg.senderId == partnerId);
       if (isTarget) {
         final exists = state.messages.any((m) => m.id == msg.id);
         if (!exists) {
@@ -459,7 +431,7 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
 
   void _markConversationRead() {
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
-    final chatId = ChatFirestoreService.getChatId(authProfile.name, partnerId);
+    final chatId = ChatFirestoreService.getChatId(authProfile.id, partnerId);
 
     _service.sendConversationReadAck(partnerId);
     _firestoreService.markAsRead(chatId: chatId, currentUserId: authProfile.id);
@@ -473,13 +445,14 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
     await _service.sendTypingSignal(partnerId, isTyping);
   }
 
-  Future<void> sendMessage(String text, {String? senderId, String senderName = 'You'}) async {
+  Future<void> sendMessage(String text, {String? senderId, String senderName = 'You', String recipientName = ''}) async {
     if (text.trim().isEmpty) return;
     await sendTypingSignal(false);
 
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
     final activeSenderId = senderId ?? authProfile.id;
     final activeSenderName = senderName != 'You' ? senderName : authProfile.name;
+    final msgId = 'msg_${DateTime.now().millisecondsSinceEpoch}';
 
     final sentData = await _service.sendDirectMessage(
       recipientUserId: partnerId,
@@ -488,19 +461,21 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
       senderName: activeSenderName,
     );
 
-    // Save to Cloud Firestore
+    // Save to Cloud Firestore using matching msgId
     await _firestoreService.sendMessage(
       senderId: activeSenderId,
       senderName: activeSenderName,
-      recipientName: partnerId,
+      recipientId: partnerId,
+      recipientName: recipientName.isNotEmpty ? recipientName : partnerId,
       content: text.trim(),
       senderAvatar: authProfile.avatarUrl,
+      messageId: msgId,
     );
 
-    final exists = state.messages.any((m) => m.id == sentData.id);
+    final exists = state.messages.any((m) => m.id == msgId || m.id == sentData.id);
     if (!exists) {
       state = state.copyWith(
-        messages: [...state.messages, sentData],
+        messages: [...state.messages, sentData.copyWith(id: msgId)],
       );
       ChatLocalCacheService().saveMessages(partnerId, state.messages);
     }
@@ -515,7 +490,7 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
 
   void toggleReaction(String messageId, String emoji) {
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
-    final chatId = ChatFirestoreService.getChatId(authProfile.name, partnerId);
+    final chatId = ChatFirestoreService.getChatId(authProfile.id, partnerId);
 
     final updatedMessages = state.messages.map((m) {
       if (m.id == messageId) {

@@ -78,33 +78,6 @@ class FeedNotifier extends StateNotifier<FeedState> {
     state = state.copyWith(selectedCategory: category);
   }
 
-  /// Increment Amen on a post (allows clicking multiple times)
-  Future<void> incrementAmen(String postId, {String userId = 'user_me'}) async {
-    final updatedPosts = state.posts.map((post) {
-      if (post.id == postId) {
-        final newCount = post.amenCount + 1;
-        final newLikedIds = List<String>.from(post.likedUserIds);
-        if (!newLikedIds.contains(userId)) {
-          newLikedIds.add(userId);
-        }
-
-        _firestoreService.incrementAmen(
-          postId: postId,
-          userId: userId,
-        );
-
-        return post.copyWith(
-          hasSaidAmen: true,
-          amenCount: newCount,
-          likedUserIds: newLikedIds,
-        );
-      }
-      return post;
-    }).toList();
-
-    state = state.copyWith(posts: updatedPosts);
-  }
-
   /// Toggle Amen / Like on a post
   Future<void> toggleAmen(String postId, {String userId = 'user_me'}) async {
     final updatedPosts = state.posts.map((post) {
@@ -285,11 +258,14 @@ class FeedNotifier extends StateNotifier<FeedState> {
           imageFile: imageFile,
           userId: userId,
         );
-        if (uploadedUrl != null) {
-          finalImageUrl = uploadedUrl;
-        } else {
-          finalImageUrl = imageFile.path;
+        if (uploadedUrl == null) {
+          state = state.copyWith(
+            isLoading: false,
+            errorMessage: 'Could not upload image. Check your connection and try again.',
+          );
+          return false;
         }
+        finalImageUrl = uploadedUrl;
       }
 
       final newPost = FeedPost(
@@ -343,7 +319,13 @@ class FeedNotifier extends StateNotifier<FeedState> {
           imageFile: imageFile,
           userId: userName.replaceAll(' ', '_'),
         );
-        finalImageUrl = uploadedUrl ?? imageFile.path;
+        if (uploadedUrl == null) {
+          state = state.copyWith(
+            errorMessage: 'Could not upload story image. Check your connection and try again.',
+          );
+          return false;
+        }
+        finalImageUrl = uploadedUrl;
       }
 
       final newStory = SanctuaryStory(

@@ -283,17 +283,23 @@ class AuthNotifier extends StateNotifier<AuthState> {
         userId: state.profile.id,
       );
 
-      final newAvatarUrl = uploadedUrl ?? imageFile.path;
+      if (uploadedUrl == null) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'Could not upload image. Check your connection and try again.',
+        );
+        return false;
+      }
 
       try {
-        await FirebaseAuth.instance.currentUser?.updatePhotoURL(newAvatarUrl);
+        await FirebaseAuth.instance.currentUser?.updatePhotoURL(uploadedUrl);
       } catch (e) {
         debugPrint('Firebase Auth updatePhotoURL error: $e');
       }
 
       state = state.copyWith(
         isLoading: false,
-        profile: state.profile.copyWith(avatarUrl: newAvatarUrl),
+        profile: state.profile.copyWith(avatarUrl: uploadedUrl),
       );
       return true;
     } catch (e) {

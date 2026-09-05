@@ -44,29 +44,34 @@ class _FellowshipConversationsScreenState
             final feedState = ref.watch(feedProvider);
             final currentProfile = ref.watch(mockAuthNotifierProvider).profile;
             // Collect unique active believers from feed posts & stories (excluding current user)
-            final activeBelieversMap = <String, String>{}; // name -> avatar
+            final activeBelieversMap = <String, Map<String, String>>{}; // id -> {name, avatar}
             for (final p in feedState.posts) {
+              final pid = p.authorId.isNotEmpty ? p.authorId : p.authorName;
               if (p.authorName.isNotEmpty &&
-                  p.authorName.toLowerCase() !=
-                      currentProfile.name.toLowerCase() &&
-                  p.authorName.toLowerCase() !=
-                      currentProfile.id.toLowerCase()) {
-                activeBelieversMap[p.authorName] = p.authorAvatar ?? '';
+                  p.authorName.toLowerCase() != currentProfile.name.toLowerCase() &&
+                  pid.toLowerCase() != currentProfile.id.toLowerCase()) {
+                activeBelieversMap[pid] = {
+                  'name': p.authorName,
+                  'avatar': p.authorAvatar ?? '',
+                };
               }
             }
             for (final s in feedState.stories) {
+              final sid = s.userName.replaceAll(' ', '_').toLowerCase();
               if (s.userName.isNotEmpty &&
-                  s.userName.toLowerCase() !=
-                      currentProfile.name.toLowerCase() &&
-                  s.userName.toLowerCase() != currentProfile.id.toLowerCase()) {
-                activeBelieversMap[s.userName] = s.userAvatar ?? '';
+                  s.userName.toLowerCase() != currentProfile.name.toLowerCase() &&
+                  sid != currentProfile.id.toLowerCase()) {
+                activeBelieversMap.putIfAbsent(sid, () => {
+                  'name': s.userName,
+                  'avatar': s.userAvatar ?? '',
+                });
               }
             }
 
             final filter = nameController.text.trim().toLowerCase();
             final filteredBelievers = activeBelieversMap.entries.where((e) {
               if (filter.isEmpty) return true;
-              return e.key.toLowerCase().contains(filter);
+              return e.value['name']!.toLowerCase().contains(filter) || e.key.toLowerCase().contains(filter);
             }).toList();
 
             final isKeyboardOpen = MediaQuery.of(ctx).viewInsets.bottom > 0;
@@ -191,8 +196,9 @@ class _FellowshipConversationsScreenState
                           ),
                           itemBuilder: (context, index) {
                             final item = filteredBelievers[index];
-                            final name = item.key;
-                            final avatar = item.value;
+                            final partnerId = item.key;
+                            final name = item.value['name'] ?? partnerId;
+                            final avatar = item.value['avatar'] ?? '';
 
                             return ListTile(
                               contentPadding: const EdgeInsets.symmetric(
@@ -246,13 +252,15 @@ class _FellowshipConversationsScreenState
                                 onPressed: () {
                                   ref
                                       .read(conversationsListProvider.notifier)
-                                      .addConversation(name, avatarUrl: avatar);
+                                      .addConversation(partnerId, partnerName: name, avatarUrl: avatar);
                                   Navigator.pop(ctx);
                                   Navigator.of(context).push(
                                     MaterialPageRoute(
                                       builder: (context) =>
                                           FellowshipChatScreen(
+                                            partnerId: partnerId,
                                             partnerName: name,
+                                            partnerAvatar: avatar,
                                           ),
                                     ),
                                   );
@@ -298,13 +306,15 @@ class _FellowshipConversationsScreenState
                           onPressed: () {
                             final targetName = nameController.text.trim();
                             if (targetName.isNotEmpty) {
+                              final targetId = targetName.replaceAll(' ', '_').toLowerCase();
                               ref
                                   .read(conversationsListProvider.notifier)
-                                  .addConversation(targetName);
+                                  .addConversation(targetId, partnerName: targetName);
                               Navigator.pop(ctx);
                               Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (context) => FellowshipChatScreen(
+                                    partnerId: targetId,
                                     partnerName: targetName,
                                   ),
                                 ),
@@ -689,7 +699,9 @@ class _FellowshipConversationsScreenState
                               Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (context) => FellowshipChatScreen(
+                                    partnerId: item.id,
                                     partnerName: displayPartnerName,
+                                    partnerAvatar: item.avatarUrl,
                                   ),
                                 ),
                               );
