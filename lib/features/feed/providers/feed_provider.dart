@@ -304,6 +304,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
 
   /// Create a new status story with image & caption
   Future<bool> createStory({
+    String userId = 'user_me',
     required String userName,
     String? userAvatar,
     required String roleTag,
@@ -317,7 +318,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
       if (imageFile != null) {
         final uploadedUrl = await _storageService.uploadPostImage(
           imageFile: imageFile,
-          userId: userName.replaceAll(' ', '_'),
+          userId: userId,
         );
         if (uploadedUrl == null) {
           state = state.copyWith(
@@ -330,6 +331,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
 
       final newStory = SanctuaryStory(
         id: 'story-${DateTime.now().millisecondsSinceEpoch}',
+        authorId: userId,
         userName: userName,
         userAvatar: userAvatar,
         roleTag: roleTag,

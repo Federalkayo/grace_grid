@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -143,11 +144,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       _authSubscription = _authService.authStateChanges.listen((user) {
         if (user != null) {
+          final newProfile = UserProfile.fromFirebaseUser(user);
           state = state.copyWith(
             status: user.isAnonymous ? AuthStatus.guest : AuthStatus.authenticated,
-            profile: UserProfile.fromFirebaseUser(user),
+            profile: newProfile,
             clearError: true,
           );
+          _syncUserToFirestore(newProfile);
         } else {
           // If signed out, re-trigger anonymous auth so a valid UID is always present
           _authService.signInAnonymously();
@@ -183,12 +186,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       final user = credential?.user;
       if (user != null) {
+        final profile = UserProfile.fromFirebaseUser(user);
         state = state.copyWith(
           status: AuthStatus.authenticated,
-          profile: UserProfile.fromFirebaseUser(user),
+          profile: profile,
           isLoading: false,
           pendingGatedActionName: null,
         );
+        _syncUserToFirestore(profile);
         return true;
       }
     } on FirebaseAuthException catch (e) {
@@ -224,12 +229,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
       final user = credential?.user;
       if (user != null) {
+        final profile = UserProfile.fromFirebaseUser(user);
         state = state.copyWith(
           status: AuthStatus.authenticated,
-          profile: UserProfile.fromFirebaseUser(user),
+          profile: profile,
           isLoading: false,
           pendingGatedActionName: null,
         );
+        _syncUserToFirestore(profile);
         return true;
       }
     } on FirebaseAuthException catch (e) {
@@ -278,9 +285,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isLoading: true);
     try {
       final storageService = FirebaseStorageService();
+      final activeUserId = FirebaseAuth.instance.currentUser?.uid ?? state.profile.id;
       final uploadedUrl = await storageService.uploadPostImage(
         imageFile: imageFile,
-        userId: state.profile.id,
+        userId: activeUserId,
       );
 
       if (uploadedUrl == null) {
@@ -297,10 +305,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
         debugPrint('Firebase Auth updatePhotoURL error: $e');
       }
 
+      final updatedProfile = state.profile.copyWith(avatarUrl: uploadedUrl);
       state = state.copyWith(
         isLoading: false,
-        profile: state.profile.copyWith(avatarUrl: uploadedUrl),
+        profile: updatedProfile,
       );
+      _syncUserToFirestore(updatedProfile);
       return true;
     } catch (e) {
       debugPrint('updateProfileAvatar error: $e');
@@ -325,6 +335,21 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   void clearError() {
     state = state.copyWith(clearError: true);
+  }
+
+  Future<void> _syncUserToFirestore(UserProfile profile) async {
+    if (profile.id.isEmpty || profile.id == 'guest') return;
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(profile.id).set({
+        'uid': profile.id,
+        'name': profile.name,
+        'email': profile.email,
+        'avatarUrl': profile.avatarUrl,
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Error syncing user profile to Firestore: $e');
+    }
   }
 }
 

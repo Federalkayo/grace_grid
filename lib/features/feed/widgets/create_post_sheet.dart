@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../core/providers/mock_auth_provider.dart';
 import '../providers/feed_provider.dart';
 
 class CreatePostSheet extends ConsumerStatefulWidget {
@@ -100,7 +101,10 @@ class _CreatePostSheetState extends ConsumerState<CreatePostSheet> {
     final String? presetUrl = _selectedPresetUrl ??
         (_imageUrlController.text.trim().isNotEmpty ? _imageUrlController.text.trim() : null);
 
+    final currentProfile = ref.read(mockAuthNotifierProvider).profile;
+
     final success = await ref.read(feedProvider.notifier).createPost(
+          userId: currentProfile.id,
           authorName: widget.currentUserName,
           authorAvatar: widget.currentUserAvatar,
           authorTitle: 'Sanctuary Believer',

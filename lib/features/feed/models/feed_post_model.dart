@@ -233,6 +233,7 @@ class FeedPost {
 
 class SanctuaryStory {
   final String id;
+  final String authorId;
   final String userName;
   final String? userAvatar;
   final String roleTag;
@@ -247,6 +248,7 @@ class SanctuaryStory {
 
   SanctuaryStory({
     required this.id,
+    this.authorId = '',
     required this.userName,
     this.userAvatar,
     required this.roleTag,
@@ -275,6 +277,7 @@ class SanctuaryStory {
 
     return SanctuaryStory(
       id: id,
+      authorId: data['authorId'] ?? '',
       userName: data['userName'] ?? 'Sanctuary Believer',
       userAvatar: data['userAvatar'],
       roleTag: data['roleTag'] ?? 'Believer',
@@ -291,6 +294,7 @@ class SanctuaryStory {
 
   Map<String, dynamic> toMap() {
     return {
+      'authorId': authorId,
       'userName': userName,
       'userAvatar': userAvatar,
       'roleTag': roleTag,
@@ -306,6 +310,7 @@ class SanctuaryStory {
 
   SanctuaryStory copyWith({
     String? id,
+    String? authorId,
     String? userName,
     String? userAvatar,
     String? roleTag,
@@ -320,6 +325,7 @@ class SanctuaryStory {
   }) {
     return SanctuaryStory(
       id: id ?? this.id,
+      authorId: authorId ?? this.authorId,
       userName: userName ?? this.userName,
       userAvatar: userAvatar ?? this.userAvatar,
       roleTag: roleTag ?? this.roleTag,

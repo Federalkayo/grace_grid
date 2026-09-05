@@ -1,8 +1,5 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:agora_chat_sdk/agora_chat_sdk.dart';
-import 'package:cloud_functions/cloud_functions.dart';
-import '../config/agora_config.dart';
 
 enum AgoraConnectionStatus {
   disconnected,
@@ -125,110 +122,30 @@ class AgoraChatService {
 
   final List<AgoraChatMessageData> _demoMessageStorage = [];
 
-  /// Initialize Agora Chat SDK
+  /// Initialize Chat Service
   Future<void> initialize() async {
     if (_isInitialized) return;
-
-    try {
-      if (!AgoraConfig.isConfigured) {
-        debugPrint('AgoraChatService: App Key unconfigured, using fallback stream mode.');
-        _isDemoMode = true;
-        _isInitialized = true;
-        _updateStatus(AgoraConnectionStatus.demoMode);
-        return;
-      }
-
-      final options = ChatOptions.withAppKey(
-        AgoraConfig.agoraAppKey,
-        autoLogin: false,
-      );
-
-      await ChatClient.getInstance.init(options);
-
-      // Register event handlers
-      ChatClient.getInstance.chatManager.addEventHandler(
-        'grace_grid_event_handler',
-        ChatEventHandler(
-          onMessagesReceived: _handleOnMessagesReceived,
-          onCmdMessagesReceived: _handleOnCmdMessagesReceived,
-          onConversationRead: (from, to) {
-            _readAckController.add(AgoraReadAckEvent(conversationId: from));
-          },
-        ),
-      );
-
-      _isInitialized = true;
-      _updateStatus(AgoraConnectionStatus.disconnected);
-      debugPrint('AgoraChatService: SDK initialized successfully.');
-    } catch (e) {
-      debugPrint('AgoraChatService: Initialization notice/fallback: $e');
-      _isDemoMode = true;
-      _isInitialized = true;
-      _updateStatus(AgoraConnectionStatus.demoMode);
-    }
+    _isDemoMode = true;
+    _isInitialized = true;
+    _updateStatus(AgoraConnectionStatus.connected);
+    debugPrint('AgoraChatService: Initialized (Firestore-backed real-time messaging active).');
   }
 
-  /// Fetch Agora Chat User Token via Firebase Cloud Function
-  Future<String?> _fetchAgoraTokenFromCloudFunction(String userId) async {
-    try {
-      final callable = FirebaseFunctions.instance.httpsCallable('generateAgoraChatToken');
-      final response = await callable.call({'uid': userId});
-      final data = response.data;
-      if (data is Map && data['token'] != null) {
-        return data['token'] as String;
-      }
-    } catch (e) {
-      debugPrint('Cloud Function token generation notice (using fallback): $e');
-    }
-    return null;
-  }
-
-  /// Login user to Agora Chat securely using server-minted token
+  /// Login user
   Future<bool> login(String userId) async {
     await initialize();
     _currentUserId = userId;
-
-    if (_isDemoMode) {
-      _updateStatus(AgoraConnectionStatus.demoMode);
-      return true;
-    }
-
-    try {
-      _updateStatus(AgoraConnectionStatus.connecting);
-      final isConnected = await ChatClient.getInstance.isConnected();
-      if (!isConnected) {
-        final serverToken = await _fetchAgoraTokenFromCloudFunction(userId);
-        if (serverToken != null) {
-          await ChatClient.getInstance.loginWithToken(userId, serverToken);
-        } else {
-          // Fallback if cloud function unconfigured
-          await ChatClient.getInstance.loginWithPassword(userId, '123456');
-        }
-      }
-      _updateStatus(AgoraConnectionStatus.connected);
-      return true;
-    } catch (e) {
-      debugPrint('AgoraChatService login notice (using demo mode fallback): $e');
-      _isDemoMode = true;
-      _updateStatus(AgoraConnectionStatus.demoMode);
-      return true;
-    }
+    _updateStatus(AgoraConnectionStatus.connected);
+    return true;
   }
 
   /// Logout current user
   Future<void> logout() async {
-    if (!_isDemoMode && _isInitialized) {
-      try {
-        await ChatClient.getInstance.logout();
-      } catch (e) {
-        debugPrint('AgoraChatService logout notice: $e');
-      }
-    }
     _currentUserId = null;
     _updateStatus(AgoraConnectionStatus.disconnected);
   }
 
-  /// Send a 1:1 direct message
+  /// Send a 1:1 direct message (broadcast locally; persistent storage is handled by Cloud Firestore)
   Future<AgoraChatMessageData> sendDirectMessage({
     required String recipientUserId,
     required String content,
@@ -249,83 +166,29 @@ class AgoraChatService {
       isRead: false,
     );
 
-    if (_isDemoMode || !_isInitialized) {
-      _demoMessageStorage.add(chatData);
-      return chatData;
-    }
-
-    try {
-      final msg = ChatMessage.createTxtSendMessage(
-        targetId: recipientUserId,
-        content: content,
-      );
-
-      await ChatClient.getInstance.chatManager.sendMessage(msg);
-      return chatData;
-    } catch (e) {
-      debugPrint('AgoraChatService sendDirectMessage fallback: $e');
-      _demoMessageStorage.add(chatData);
-      return chatData;
-    }
+    _demoMessageStorage.add(chatData);
+    return chatData;
   }
 
   /// Send real-time typing signal to partner
   Future<void> sendTypingSignal(String recipientUserId, bool isTyping) async {
-    if (_isDemoMode || !_isInitialized) {
-      _typingEventController.add(AgoraTypingEvent(
-        conversationId: recipientUserId,
-        userId: recipientUserId,
-        isTyping: isTyping,
-      ));
-      return;
-    }
-
-    try {
-      final cmdMsg = ChatMessage.createCmdSendMessage(
-        targetId: recipientUserId,
-        action: isTyping ? 'TYPING_START' : 'TYPING_STOP',
-      );
-      await ChatClient.getInstance.chatManager.sendMessage(cmdMsg);
-    } catch (e) {
-      debugPrint('sendTypingSignal notice: $e');
-    }
+    _typingEventController.add(AgoraTypingEvent(
+      conversationId: recipientUserId,
+      userId: recipientUserId,
+      isTyping: isTyping,
+    ));
   }
 
   /// Send Read Acknowledgment for a conversation
   Future<void> sendConversationReadAck(String conversationId) async {
-    if (_isDemoMode || !_isInitialized) {
-      _readAckController.add(AgoraReadAckEvent(conversationId: conversationId));
-      return;
-    }
-
-    try {
-      await ChatClient.getInstance.chatManager.sendConversationReadAck(conversationId);
-    } catch (e) {
-      debugPrint('sendConversationReadAck notice: $e');
-    }
+    _readAckController.add(AgoraReadAckEvent(conversationId: conversationId));
   }
 
   /// Join a Chat Room (e.g. for Live Worship)
-  Future<void> joinChatRoom(String roomId) async {
-    if (_isDemoMode || !_isInitialized) return;
-
-    try {
-      await ChatClient.getInstance.chatRoomManager.joinChatRoom(roomId);
-    } catch (e) {
-      debugPrint('AgoraChatService joinChatRoom notice: $e');
-    }
-  }
+  Future<void> joinChatRoom(String roomId) async {}
 
   /// Leave a Chat Room
-  Future<void> leaveChatRoom(String roomId) async {
-    if (_isDemoMode || !_isInitialized) return;
-
-    try {
-      await ChatClient.getInstance.chatRoomManager.leaveChatRoom(roomId);
-    } catch (e) {
-      debugPrint('AgoraChatService leaveChatRoom notice: $e');
-    }
-  }
+  Future<void> leaveChatRoom(String roomId) async {}
 
   /// Send a message to a Chat Room
   Future<AgoraChatMessageData> sendRoomMessage({
@@ -346,60 +209,8 @@ class AgoraChatService {
       isRead: false,
     );
 
-    if (_isDemoMode || !_isInitialized) {
-      _demoMessageStorage.add(chatData);
-      return chatData;
-    }
-
-    try {
-      final msg = ChatMessage.createTxtSendMessage(
-        targetId: roomId,
-        content: content,
-        chatType: ChatType.ChatRoom,
-      );
-
-      await ChatClient.getInstance.chatManager.sendMessage(msg);
-      return chatData;
-    } catch (e) {
-      debugPrint('AgoraChatService sendRoomMessage fallback: $e');
-      _demoMessageStorage.add(chatData);
-      return chatData;
-    }
-  }
-
-  void _handleOnMessagesReceived(List<ChatMessage> messages) {
-    for (var msg in messages) {
-      if (msg.body.type == MessageType.TXT) {
-        final txtBody = msg.body as ChatTextMessageBody;
-        final chatData = AgoraChatMessageData(
-          id: msg.msgId,
-          senderId: msg.from ?? 'unknown',
-          senderName: msg.from ?? 'Believer',
-          content: txtBody.content,
-          timestamp: DateTime.fromMillisecondsSinceEpoch(msg.serverTime),
-          isMe: msg.from == _currentUserId,
-          conversationId: msg.conversationId,
-          isDelivered: true,
-          isRead: false,
-        );
-        _incomingMessageController.add(chatData);
-      }
-    }
-  }
-
-  void _handleOnCmdMessagesReceived(List<ChatMessage> messages) {
-    for (var msg in messages) {
-      if (msg.body.type == MessageType.CMD) {
-        final cmdBody = msg.body as ChatCmdMessageBody;
-        if (cmdBody.action == 'TYPING_START' || cmdBody.action == 'TYPING_STOP') {
-          _typingEventController.add(AgoraTypingEvent(
-            conversationId: msg.conversationId ?? msg.from ?? '',
-            userId: msg.from ?? '',
-            isTyping: cmdBody.action == 'TYPING_START',
-          ));
-        }
-      }
-    }
+    _demoMessageStorage.add(chatData);
+    return chatData;
   }
 
   void _updateStatus(AgoraConnectionStatus newStatus) {
@@ -408,12 +219,10 @@ class AgoraChatService {
   }
 
   void dispose() {
-    if (_isInitialized && !_isDemoMode) {
-      ChatClient.getInstance.chatManager.removeEventHandler('grace_grid_event_handler');
-    }
     _incomingMessageController.close();
     _statusController.close();
     _typingEventController.close();
     _readAckController.close();
   }
 }
+

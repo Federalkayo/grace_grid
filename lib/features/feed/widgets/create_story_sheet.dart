@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/glass_card.dart';
+import '../../../core/providers/mock_auth_provider.dart';
 import '../providers/feed_provider.dart';
 
 class CreateStorySheet extends ConsumerStatefulWidget {
@@ -93,7 +94,10 @@ class _CreateStorySheetState extends ConsumerState<CreateStorySheet> {
 
     setState(() => _isPublishing = true);
 
+    final currentProfile = ref.read(mockAuthNotifierProvider).profile;
+
     final success = await ref.read(feedProvider.notifier).createStory(
+          userId: currentProfile.id,
           userName: widget.currentUserName,
           userAvatar: widget.currentUserAvatar,
           roleTag: 'Sanctuary Believer',

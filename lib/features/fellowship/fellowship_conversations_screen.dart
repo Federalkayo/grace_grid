@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -30,6 +31,7 @@ class _FellowshipConversationsScreenState
 
   void _showStartNewChatDialog(BuildContext context) {
     final nameController = TextEditingController();
+    final usersFuture = FirebaseFirestore.instance.collection('users').limit(50).get();
 
     showModalBottomSheet(
       context: context,
@@ -39,40 +41,55 @@ class _FellowshipConversationsScreenState
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
-        return StatefulBuilder(
-          builder: (modalContext, setModalState) {
-            final feedState = ref.watch(feedProvider);
-            final currentProfile = ref.watch(mockAuthNotifierProvider).profile;
-            // Collect unique active believers from feed posts & stories (excluding current user)
-            final activeBelieversMap = <String, Map<String, String>>{}; // id -> {name, avatar}
-            for (final p in feedState.posts) {
-              final pid = p.authorId.isNotEmpty ? p.authorId : p.authorName;
-              if (p.authorName.isNotEmpty &&
-                  p.authorName.toLowerCase() != currentProfile.name.toLowerCase() &&
-                  pid.toLowerCase() != currentProfile.id.toLowerCase()) {
-                activeBelieversMap[pid] = {
-                  'name': p.authorName,
-                  'avatar': p.authorAvatar ?? '',
-                };
-              }
-            }
-            for (final s in feedState.stories) {
-              final sid = s.userName.replaceAll(' ', '_').toLowerCase();
-              if (s.userName.isNotEmpty &&
-                  s.userName.toLowerCase() != currentProfile.name.toLowerCase() &&
-                  sid != currentProfile.id.toLowerCase()) {
-                activeBelieversMap.putIfAbsent(sid, () => {
-                  'name': s.userName,
-                  'avatar': s.userAvatar ?? '',
-                });
-              }
-            }
+        return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          future: usersFuture,
+          builder: (ctx, snapshot) {
+            return StatefulBuilder(
+              builder: (modalContext, setModalState) {
+                final feedState = ref.watch(feedProvider);
+                final currentProfile = ref.watch(mockAuthNotifierProvider).profile;
+                // Collect unique active believers from Firestore users directory + feed posts & stories
+                final activeBelieversMap = <String, Map<String, String>>{}; // id -> {name, avatar}
 
-            final filter = nameController.text.trim().toLowerCase();
-            final filteredBelievers = activeBelieversMap.entries.where((e) {
-              if (filter.isEmpty) return true;
-              return e.value['name']!.toLowerCase().contains(filter) || e.key.toLowerCase().contains(filter);
-            }).toList();
+                if (snapshot.hasData && snapshot.data != null) {
+                  for (final doc in snapshot.data!.docs) {
+                    if (doc.id == currentProfile.id) continue; // skip self
+                    final data = doc.data();
+                    activeBelieversMap[doc.id] = {
+                      'name': (data['name'] ?? 'Believer').toString(),
+                      'avatar': (data['avatarUrl'] ?? '').toString(),
+                    };
+                  }
+                }
+
+                for (final p in feedState.posts) {
+                  final pid = p.authorId.isNotEmpty ? p.authorId : p.authorName;
+                  if (p.authorName.isNotEmpty &&
+                      p.authorName.toLowerCase() != currentProfile.name.toLowerCase() &&
+                      pid.toLowerCase() != currentProfile.id.toLowerCase()) {
+                    activeBelieversMap.putIfAbsent(pid, () => {
+                      'name': p.authorName,
+                      'avatar': p.authorAvatar ?? '',
+                    });
+                  }
+                }
+                for (final s in feedState.stories) {
+                  final sid = s.authorId.isNotEmpty ? s.authorId : s.userName.replaceAll(' ', '_').toLowerCase();
+                  if (s.userName.isNotEmpty &&
+                      s.userName.toLowerCase() != currentProfile.name.toLowerCase() &&
+                      sid.toLowerCase() != currentProfile.id.toLowerCase()) {
+                    activeBelieversMap.putIfAbsent(sid, () => {
+                      'name': s.userName,
+                      'avatar': s.userAvatar ?? '',
+                    });
+                  }
+                }
+
+                final filter = nameController.text.trim().toLowerCase();
+                final filteredBelievers = activeBelieversMap.entries.where((e) {
+                  if (filter.isEmpty) return true;
+                  return e.value['name']!.toLowerCase().contains(filter) || e.key.toLowerCase().contains(filter);
+                }).toList();
 
             final isKeyboardOpen = MediaQuery.of(ctx).viewInsets.bottom > 0;
 
@@ -336,7 +353,9 @@ class _FellowshipConversationsScreenState
         );
       },
     );
-  }
+  },
+);
+}
 
   @override
   Widget build(BuildContext context) {
@@ -498,11 +517,13 @@ class _FellowshipConversationsScreenState
                             p.authorId.toLowerCase() ==
                                 item.partnerName.toLowerCase();
                         if (matchName || matchId) {
-                          if (displayPartnerName.isEmpty || isRawId)
+                          if (displayPartnerName.isEmpty || isRawId) {
                             displayPartnerName = p.authorName;
+                          }
                           if (effectiveAvatarUrl.isEmpty &&
-                              (p.authorAvatar ?? '').isNotEmpty)
+                              (p.authorAvatar ?? '').isNotEmpty) {
                             effectiveAvatarUrl = p.authorAvatar!;
+                          }
                           break;
                         }
                       }
@@ -513,11 +534,13 @@ class _FellowshipConversationsScreenState
                               s.userName.toLowerCase() ==
                               item.partnerName.toLowerCase();
                           if (matchName) {
-                            if (displayPartnerName.isEmpty || isRawId)
+                            if (displayPartnerName.isEmpty || isRawId) {
                               displayPartnerName = s.userName;
+                            }
                             if (effectiveAvatarUrl.isEmpty &&
-                                (s.userAvatar ?? '').isNotEmpty)
+                                (s.userAvatar ?? '').isNotEmpty) {
                               effectiveAvatarUrl = s.userAvatar!;
+                            }
                             break;
                           }
                         }
@@ -532,10 +555,13 @@ class _FellowshipConversationsScreenState
                               mockS.userName.toLowerCase().contains(
                                 item.partnerName.toLowerCase(),
                               )) {
-                            if (isRawId) displayPartnerName = mockS.userName;
+                            if (isRawId) {
+                              displayPartnerName = mockS.userName;
+                            }
                             if (effectiveAvatarUrl.isEmpty &&
-                                (mockS.userAvatar ?? '').isNotEmpty)
+                                (mockS.userAvatar ?? '').isNotEmpty) {
                               effectiveAvatarUrl = mockS.userAvatar!;
+                            }
                             break;
                           }
                         }
