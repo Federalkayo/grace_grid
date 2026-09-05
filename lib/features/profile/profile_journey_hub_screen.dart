@@ -1,18 +1,110 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_card.dart';
 import '../../core/widgets/sanctuary_buttons.dart';
 import '../../core/providers/mock_auth_provider.dart';
 import '../auth/login_signup_modal.dart';
+import '../fellowship/fellowship_conversations_screen.dart';
 
 class ProfileJourneyHubScreen extends ConsumerWidget {
   const ProfileJourneyHubScreen({super.key});
+
+  Future<void> _pickAndChangeAvatar(BuildContext context, WidgetRef ref, ImageSource source) async {
+    try {
+      final picker = ImagePicker();
+      final image = await picker.pickImage(
+        source: source,
+        maxWidth: 1000,
+        maxHeight: 1000,
+        imageQuality: 85,
+      );
+
+      if (image != null) {
+        final success = await ref.read(mockAuthNotifierProvider.notifier).updateProfileAvatar(image);
+        if (context.mounted && success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Profile picture updated successfully!'),
+              backgroundColor: AppTheme.primaryContainer,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not set profile image: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showAvatarPickerModal(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surfaceLow,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppTheme.emeraldStrokeAlpha25,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Change Profile Picture',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.onSurface,
+              ),
+            ),
+            const SizedBox(height: 20),
+            ListTile(
+              leading: const Icon(Icons.photo_library, color: AppTheme.primaryContainer),
+              title: const Text('Choose from Gallery', style: TextStyle(color: AppTheme.onSurface)),
+              onTap: () {
+                Navigator.pop(context);
+                _pickAndChangeAvatar(context, ref, ImageSource.gallery);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt, color: AppTheme.primaryContainer),
+              title: const Text('Take a Photo', style: TextStyle(color: AppTheme.onSurface)),
+              onTap: () {
+                Navigator.pop(context);
+                _pickAndChangeAvatar(context, ref, ImageSource.camera);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  ImageProvider? _getAvatarProvider(String avatarUrl) {
+    return getAvatarImageProvider(avatarUrl);
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(mockAuthNotifierProvider);
     final profile = authState.profile;
+    final avatarProvider = _getAvatarProvider(profile.avatarUrl);
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -28,6 +120,17 @@ class ProfileJourneyHubScreen extends ConsumerWidget {
           ),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.forum_outlined, color: AppTheme.primaryContainer),
+            tooltip: 'Fellowship Messages',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => const FellowshipConversationsScreen(),
+                ),
+              );
+            },
+          ),
           if (authState.isAuthenticated)
             IconButton(
               icon: const Icon(Icons.logout, color: AppTheme.error),
@@ -46,13 +149,35 @@ class ProfileJourneyHubScreen extends ConsumerWidget {
             padding: const EdgeInsets.all(20),
             child: Column(
               children: [
-                CircleAvatar(
-                  radius: 36,
-                  backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
-                  child: Icon(
-                    authState.isGuest ? Icons.person_outline : Icons.auto_awesome,
-                    size: 36,
-                    color: AppTheme.primaryContainer,
+                GestureDetector(
+                  onTap: () => _showAvatarPickerModal(context, ref),
+                  child: Stack(
+                    children: [
+                      CircleAvatar(
+                        radius: 40,
+                        backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
+                        backgroundImage: avatarProvider,
+                        child: avatarProvider == null
+                            ? Icon(
+                                authState.isGuest ? Icons.person_outline : Icons.auto_awesome,
+                                size: 40,
+                                color: AppTheme.primaryContainer,
+                              )
+                            : null,
+                      ),
+                      Positioned(
+                        bottom: 0,
+                        right: 0,
+                        child: Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: const BoxDecoration(
+                            color: AppTheme.primaryContainer,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.camera_alt, size: 14, color: AppTheme.onPrimary),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 12),

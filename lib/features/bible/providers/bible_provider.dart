@@ -19,7 +19,7 @@ class BibleState {
   final BibleVerse? activeSelectedVerse;
 
   BibleState({
-    this.selectedTranslation = 'WEB',
+    this.selectedTranslation = 'KJV',
     this.selectedBookId = 'JHN',
     this.selectedBook,
     this.selectedChapter = 3,

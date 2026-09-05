@@ -27,7 +27,7 @@ class BiblePassage {
 }
 
 class MockBibleData {
-  static const List<String> availableTranslations = ['WEB', 'KJV', 'NIV', 'ESV'];
+  static const List<String> availableTranslations = ['KJV', 'ASV', 'WEB', 'YOR'];
 
   static const List<BiblePassage> passages = [
     BiblePassage(

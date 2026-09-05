@@ -1,11 +1,16 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_card.dart';
-import '../../core/data/mock_community_data.dart';
+import '../../core/providers/agora_chat_provider.dart';
+import '../../core/providers/mock_auth_provider.dart';
+import '../../core/services/agora_chat_service.dart';
+import '../feed/providers/feed_provider.dart';
 import 'voice_prayer_call_screen.dart';
 import 'video_fellowship_call_screen.dart';
 
-class FellowshipChatScreen extends StatefulWidget {
+class FellowshipChatScreen extends ConsumerStatefulWidget {
   final String partnerName;
 
   const FellowshipChatScreen({
@@ -14,43 +19,143 @@ class FellowshipChatScreen extends StatefulWidget {
   });
 
   @override
-  State<FellowshipChatScreen> createState() => _FellowshipChatScreenState();
+  ConsumerState<FellowshipChatScreen> createState() => _FellowshipChatScreenState();
 }
 
-class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
+class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
   final TextEditingController _msgController = TextEditingController();
-  late List<ChatMessage> _messages;
+  final ScrollController _scrollController = ScrollController();
+  Timer? _typingTimer;
 
   @override
   void initState() {
     super.initState();
-    _messages = List.from(MockCommunityData.mockChatMessages);
+    _msgController.addListener(_onTextChanged);
   }
 
-  void _sendMessage() {
-    if (_msgController.text.trim().isEmpty) return;
-    setState(() {
-      _messages.add(
-        ChatMessage(
-          id: 'msg-${DateTime.now().millisecondsSinceEpoch}',
-          senderName: 'You',
-          text: _msgController.text.trim(),
-          timestamp: 'Just now',
-          isMe: true,
-        ),
-      );
-      _msgController.clear();
+  void _onTextChanged() {
+    final text = _msgController.text;
+    if (text.isNotEmpty) {
+      ref.read(fellowshipChatProvider(widget.partnerName).notifier).sendTypingSignal(true);
+      _typingTimer?.cancel();
+      _typingTimer = Timer(const Duration(milliseconds: 1500), () {
+        ref.read(fellowshipChatProvider(widget.partnerName).notifier).sendTypingSignal(false);
+      });
+    }
+  }
+
+  void _handleSend() {
+    final text = _msgController.text.trim();
+    if (text.isEmpty) return;
+
+    final authProfile = ref.read(mockAuthNotifierProvider).profile;
+    _typingTimer?.cancel();
+    ref.read(fellowshipChatProvider(widget.partnerName).notifier).sendMessage(
+      text,
+      senderId: authProfile.id,
+      senderName: authProfile.name,
+    );
+    _msgController.clear();
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
     });
   }
 
   @override
   void dispose() {
+    _typingTimer?.cancel();
+    _msgController.removeListener(_onTextChanged);
     _msgController.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  void _showReactionPicker(BuildContext context, String messageId) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surfaceLow,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('React to Message', style: TextStyle(color: AppTheme.onSurface, fontWeight: FontWeight.bold, fontSize: 14)),
+            const SizedBox(height: 14),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: ['❤️', '🙏', '👍', '🔥', '😂', '😮'].map((emoji) {
+                return GestureDetector(
+                  onTap: () {
+                    ref.read(fellowshipChatProvider(widget.partnerName).notifier).toggleReaction(messageId, emoji);
+                    Navigator.pop(ctx);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceLowest,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
+                    ),
+                    child: Text(emoji, style: const TextStyle(fontSize: 24)),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final chatState = ref.watch(fellowshipChatProvider(widget.partnerName));
+    final connStatus = ref.watch(agoraConnectionStatusProvider).value ?? AgoraConnectionStatus.demoMode;
+    final authProfile = ref.watch(mockAuthNotifierProvider).profile;
+    final conversations = ref.watch(conversationsListProvider);
+    final feedState = ref.watch(feedProvider);
+
+    String partnerAvatarUrl = '';
+    for (final c in conversations) {
+      if (c.partnerName.toLowerCase() == widget.partnerName.toLowerCase() || c.id.toLowerCase() == widget.partnerName.toLowerCase()) {
+        if (c.avatarUrl.isNotEmpty) {
+          partnerAvatarUrl = c.avatarUrl;
+          break;
+        }
+      }
+    }
+    if (partnerAvatarUrl.isEmpty) {
+      for (final p in feedState.posts) {
+        if (p.authorName.toLowerCase() == widget.partnerName.toLowerCase() && (p.authorAvatar ?? '').isNotEmpty) {
+          partnerAvatarUrl = p.authorAvatar!;
+          break;
+        }
+      }
+    }
+    if (partnerAvatarUrl.isEmpty) {
+      for (final s in feedState.stories) {
+        if (s.userName.toLowerCase() == widget.partnerName.toLowerCase() && (s.userAvatar ?? '').isNotEmpty) {
+          partnerAvatarUrl = s.userAvatar!;
+          break;
+        }
+      }
+    }
+
+    final partnerAvatarImg = getAvatarImageProvider(partnerAvatarUrl);
+
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
@@ -65,27 +170,48 @@ class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
             CircleAvatar(
               radius: 18,
               backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
-              child: Text(
-                widget.partnerName[0],
-                style: const TextStyle(color: AppTheme.primaryContainer, fontWeight: FontWeight.bold),
-              ),
+              backgroundImage: partnerAvatarImg,
+              child: partnerAvatarImg == null
+                  ? Text(
+                      widget.partnerName.isNotEmpty ? widget.partnerName[0].toUpperCase() : 'P',
+                      style: const TextStyle(color: AppTheme.primaryContainer, fontWeight: FontWeight.bold),
+                    )
+                  : null,
             ),
             const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  widget.partnerName,
-                  style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.onSurface),
-                ),
-                Row(
-                  children: [
-                    Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppTheme.primaryContainer, shape: BoxShape.circle)),
-                    const SizedBox(width: 4),
-                    const Text('Active in Sanctuary', style: TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant)),
-                  ],
-                ),
-              ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.partnerName,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppTheme.onSurface),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                          color: AppTheme.primaryContainer,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          connStatus == AgoraConnectionStatus.connected
+                              ? 'Agora Chat • Active'
+                              : 'Agora Live Stream',
+                          style: const TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -118,7 +244,7 @@ class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
       ),
       body: Column(
         children: [
-          // Encrypted Prayer Focus Banner
+          // Private Connection Info Banner
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             color: AppTheme.surfaceContainer.withValues(alpha: 0.6),
@@ -128,8 +254,8 @@ class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
                 Icon(Icons.shield_outlined, size: 14, color: AppTheme.primaryContainer),
                 SizedBox(width: 6),
                 Text(
-                  'Encrypted 1:1 Fellowship & Intercession Room',
-                  style: TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
+                  'Private 1:1 Fellowship Room • TLS Secured',
+                  style: TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant, fontWeight: FontWeight.w500),
                 ),
               ],
             ),
@@ -138,41 +264,88 @@ class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
           // Messages List
           Expanded(
             child: ListView.builder(
+              controller: _scrollController,
               padding: const EdgeInsets.all(16),
-              itemCount: _messages.length,
+              itemCount: chatState.messages.length,
               itemBuilder: (context, index) {
-                final msg = _messages[index];
+                final msg = chatState.messages[index];
+                final isMe = (msg.senderId.isNotEmpty && msg.senderId == authProfile.id) ||
+                             (msg.senderName.isNotEmpty && msg.senderName.toLowerCase() == authProfile.name.toLowerCase()) ||
+                             (msg.isMe && (msg.senderId == authProfile.id || msg.senderId == 'user_me'));
 
                 return Align(
-                  alignment: msg.isMe ? Alignment.centerRight : Alignment.centerLeft,
+                  alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
                     margin: const EdgeInsets.only(bottom: 12),
-                    child: GlassCard(
-                      level: msg.isMe ? GlassLevel.level2 : GlassLevel.level1,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      customSurfaceColor: msg.isMe
-                          ? AppTheme.primaryContainer.withValues(alpha: 0.2)
-                          : AppTheme.surfaceLow.withValues(alpha: 0.8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            msg.text,
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: msg.isMe ? AppTheme.primary : AppTheme.onSurface,
+                    child: GestureDetector(
+                      onLongPress: () => _showReactionPicker(context, msg.id),
+                      child: GlassCard(
+                        level: isMe ? GlassLevel.level2 : GlassLevel.level1,
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        customSurfaceColor: isMe
+                            ? AppTheme.primaryContainer.withValues(alpha: 0.2)
+                            : AppTheme.surfaceLow.withValues(alpha: 0.8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (!isMe)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 4.0),
+                                child: Text(
+                                  msg.senderName,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.primaryContainer,
+                                  ),
+                                ),
+                              ),
+                            Text(
+                              msg.content,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: isMe ? AppTheme.primary : AppTheme.onSurface,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 4),
-                          Align(
-                            alignment: Alignment.centerRight,
-                            child: Text(
-                              msg.timestamp,
-                              style: const TextStyle(fontSize: 10, color: AppTheme.onSurfaceVariant),
+                            if (msg.reactions.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 4,
+                                children: msg.reactions.map((r) => Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.surfaceLowest,
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
+                                  ),
+                                  child: Text(r, style: const TextStyle(fontSize: 12)),
+                                )).toList(),
+                              ),
+                            ],
+                            const SizedBox(height: 4),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                Text(
+                                  msg.formattedTime,
+                                  style: const TextStyle(fontSize: 10, color: AppTheme.onSurfaceVariant),
+                                ),
+                                if (isMe) ...[
+                                  const SizedBox(width: 4),
+                                  Icon(
+                                    (msg.isRead || msg.isDelivered) ? Icons.done_all : Icons.done,
+                                    size: 15,
+                                    color: msg.isRead
+                                        ? AppTheme.primaryContainer
+                                        : AppTheme.onSurfaceVariant.withValues(alpha: 0.7),
+                                  ),
+                                ],
+                              ],
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -180,6 +353,36 @@ class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
               },
             ),
           ),
+
+          // Real-Time Typing Indicator Bubble
+          if (chatState.isPartnerTyping)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppTheme.primaryContainer,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${widget.partnerName} is typing...',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                        color: AppTheme.primaryContainer,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
 
           // Chat Input Bar
           Container(
@@ -207,8 +410,9 @@ class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
                     child: TextField(
                       controller: _msgController,
                       style: const TextStyle(fontSize: 14, color: AppTheme.onSurface),
+                      onSubmitted: (_) => _handleSend(),
                       decoration: const InputDecoration(
-                        hintText: 'Send encrypted prayer note...',
+                        hintText: 'Send a prayer note...',
                         hintStyle: TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
                         border: InputBorder.none,
                         contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -218,7 +422,7 @@ class _FellowshipChatScreenState extends State<FellowshipChatScreen> {
                 ),
                 const SizedBox(width: 8),
                 GestureDetector(
-                  onTap: _sendMessage,
+                  onTap: _handleSend,
                   child: Container(
                     padding: const EdgeInsets.all(10),
                     decoration: const BoxDecoration(

@@ -179,6 +179,66 @@ class FirebaseAuthService {
     }
   }
 
+  /// Signs in anonymously to ensure every guest gets a real, unique Firebase UID.
+  Future<UserCredential?> signInAnonymously() async {
+    final instance = _auth;
+    if (instance == null) return null;
+
+    try {
+      return await instance.signInAnonymously();
+    } on FirebaseAuthException catch (e) {
+      debugPrint('signInAnonymously exception: ${e.code} - ${e.message}');
+      return null;
+    } catch (e) {
+      debugPrint('signInAnonymously unknown error: $e');
+      return null;
+    }
+  }
+
+  /// Links an existing anonymous user account with Email & Password credentials.
+  Future<UserCredential?> linkWithEmailCredential({
+    required String email,
+    required String password,
+    String? displayName,
+  }) async {
+    final instance = _auth;
+    final user = instance?.currentUser;
+
+    if (user == null) {
+      return signUpWithEmailAndPassword(email: email, password: password, displayName: displayName);
+    }
+
+    if (!user.isAnonymous) {
+      return signInWithEmailAndPassword(email: email, password: password);
+    }
+
+    try {
+      final credential = EmailAuthProvider.credential(email: email.trim(), password: password);
+      final userCredential = await user.linkWithCredential(credential);
+
+      if (displayName != null && displayName.trim().isNotEmpty && userCredential.user != null) {
+        await userCredential.user!.updateDisplayName(displayName.trim());
+        await userCredential.user!.reload();
+      }
+
+      return userCredential;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'credential-already-in-use' || e.code == 'email-already-in-use') {
+        // If email is already tied to an existing account, fall back to sign in
+        return signInWithEmailAndPassword(email: email, password: password);
+      }
+      throw FirebaseAuthException(
+        code: e.code,
+        message: mapFirebaseAuthException(e),
+      );
+    } catch (e) {
+      throw FirebaseAuthException(
+        code: 'unknown',
+        message: 'Unable to link account credentials: ${e.toString()}',
+      );
+    }
+  }
+
   /// Signs out the currently authenticated user.
   Future<void> signOut() async {
     final instance = _auth;

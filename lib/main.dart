@@ -4,6 +4,7 @@ import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'core/theme/app_theme.dart';
+import 'core/services/agora_chat_service.dart';
 import 'features/splash/book_flip_splash_screen.dart';
 
 void main() async {
@@ -16,6 +17,12 @@ void main() async {
     );
   } catch (e) {
     debugPrint('Firebase.initializeApp notice: $e');
+  }
+
+  try {
+    await AgoraChatService().initialize();
+  } catch (e) {
+    debugPrint('AgoraChatService.initialize notice: $e');
   }
 
   runApp(

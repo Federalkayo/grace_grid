@@ -30,17 +30,37 @@ class _BibleReaderScreenState extends ConsumerState<BibleReaderScreen> {
     super.dispose();
   }
 
-  void _scrollToVerse(int verseNumber) {
+  void _scrollToVerse(int verseNumber, [int retryCount = 0]) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+
+      final state = ref.read(bibleProvider);
+      final verseIndex = state.verses.indexWhere((v) => v.verse == verseNumber);
+
+      if (verseIndex >= 0 && _mainScrollController.hasClients) {
+        final estimatedOffset = (160.0 + (verseIndex * 78.0)).clamp(
+          0.0,
+          _mainScrollController.position.maxScrollExtent,
+        );
+        _mainScrollController.animateTo(
+          estimatedOffset,
+          duration: Duration(milliseconds: retryCount == 0 ? 400 : 200),
+          curve: Curves.easeInOutCubic,
+        );
+      }
+
       final key = _verseKeys[verseNumber];
       if (key?.currentContext != null) {
         Scrollable.ensureVisible(
           key!.currentContext!,
-          duration: const Duration(milliseconds: 500),
+          duration: const Duration(milliseconds: 300),
           curve: Curves.easeInOutCubic,
           alignment: 0.12,
         );
+      } else if (retryCount < 5) {
+        Future.delayed(const Duration(milliseconds: 150), () {
+          if (mounted) _scrollToVerse(verseNumber, retryCount + 1);
+        });
       }
     });
   }
@@ -983,7 +1003,7 @@ class _BibleReaderScreenState extends ConsumerState<BibleReaderScreen> {
     if (_lastScrolledBookChapter != currentBookChapter) {
       _verseKeys.clear();
       _lastScrolledBookChapter = currentBookChapter;
-      _lastScrolledVerse = state.targetVerseNumber;
+      _lastScrolledVerse = null;
       if (!state.isLoading && state.targetVerseNumber == null) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (mounted && _mainScrollController.hasClients) {
@@ -1011,43 +1031,54 @@ class _BibleReaderScreenState extends ConsumerState<BibleReaderScreen> {
       appBar: AppBar(
         backgroundColor: AppTheme.surfaceLow.withValues(alpha: 0.9),
         elevation: 0,
+        titleSpacing: 8,
         title: GestureDetector(
           onTap: () => _showBookChapterPickerSheet(context, state),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                '$currentBookTitle ${state.selectedChapter}',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.onSurface,
+              Flexible(
+                child: Text(
+                  '$currentBookTitle ${state.selectedChapter}',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.onSurface,
+                  ),
                 ),
               ),
-              const SizedBox(width: 4),
-              const Icon(Icons.keyboard_arrow_down, color: AppTheme.primaryContainer),
+              const SizedBox(width: 2),
+              const Icon(Icons.keyboard_arrow_down, color: AppTheme.primaryContainer, size: 20),
             ],
           ),
         ),
         actions: [
           // Search Action
           IconButton(
-            icon: const Icon(Icons.search, color: AppTheme.onSurfaceVariant),
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(),
+            icon: const Icon(Icons.search, color: AppTheme.onSurfaceVariant, size: 22),
             onPressed: () => _showSearchSheet(context, state),
           ),
+          const SizedBox(width: 2),
 
           // Saved Bookmarks Action
           IconButton(
-            icon: const Icon(Icons.bookmark_border, color: AppTheme.onSurfaceVariant),
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(),
+            icon: const Icon(Icons.bookmark_border, color: AppTheme.onSurfaceVariant, size: 22),
             tooltip: 'Saved Bookmarks',
             onPressed: () => _showBookmarksSheet(context),
           ),
+          const SizedBox(width: 2),
 
           // Translation Picker Popup
           PopupMenuButton<String>(
+            padding: EdgeInsets.zero,
             initialValue: state.selectedTranslation,
             icon: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
                 color: AppTheme.primaryContainer.withValues(alpha: 0.15),
                 borderRadius: BorderRadius.circular(6),
@@ -1056,7 +1087,7 @@ class _BibleReaderScreenState extends ConsumerState<BibleReaderScreen> {
               child: Text(
                 state.selectedTranslation,
                 style: const TextStyle(
-                  fontSize: 12,
+                  fontSize: 11,
                   fontWeight: FontWeight.bold,
                   color: AppTheme.primaryContainer,
                 ),
@@ -1080,11 +1111,15 @@ class _BibleReaderScreenState extends ConsumerState<BibleReaderScreen> {
                 )
                 .toList(),
           ),
+          const SizedBox(width: 2),
+
           IconButton(
-            icon: const Icon(Icons.format_size, color: AppTheme.onSurfaceVariant),
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(),
+            icon: const Icon(Icons.format_size, color: AppTheme.onSurfaceVariant, size: 22),
             onPressed: () => _showReadingSettingsSheet(context),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
         ],
       ),
       body: Stack(

@@ -190,10 +190,9 @@ class BibleDatabaseService {
   Database? _db;
 
   static const List<BibleTranslationInfo> supportedTranslations = [
-    BibleTranslationInfo(code: 'WEB', name: 'World English Bible'),
     BibleTranslationInfo(code: 'KJV', name: 'King James Version'),
-    BibleTranslationInfo(code: 'NIV', name: 'New International Version'),
-    BibleTranslationInfo(code: 'ESV', name: 'English Standard Version'),
+    BibleTranslationInfo(code: 'ASV', name: 'American Standard Version'),
+    BibleTranslationInfo(code: 'WEB', name: 'World English Bible'),
     BibleTranslationInfo(code: 'YOR', name: 'Bibeli Mimo (Yoruba)'),
   ];
 

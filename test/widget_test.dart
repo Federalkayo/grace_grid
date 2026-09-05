@@ -1,11 +1,22 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:grace_grid/main.dart';
 
+class MockHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+  }
+}
+
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  HttpOverrides.global = MockHttpOverrides();
+
   testWidgets('GraceGridApp smoke test loads and transitions from splash to main shell', (WidgetTester tester) async {
-    // Build GraceGridApp wrapped in ProviderScope and trigger initial frame.
     await tester.pumpWidget(
       const ProviderScope(
         child: GraceGridApp(),

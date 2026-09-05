@@ -1,5 +1,30 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
+/// Helper function to safely parse image providers for avatars (HTTP or File or Fallback)
+ImageProvider? getAvatarImageProvider(String? url) {
+  if (url == null) return null;
+  final clean = url.trim();
+  if (clean.isEmpty) return null;
+  if (clean.startsWith('http://') || clean.startsWith('https://')) {
+    return NetworkImage(clean);
+  }
+  if (clean.startsWith('assets/')) {
+    return AssetImage(clean);
+  }
+  if (clean.startsWith('file://')) {
+    try {
+      final file = File(Uri.parse(clean).toFilePath());
+      if (file.existsSync()) return FileImage(file);
+    } catch (_) {}
+  }
+  try {
+    final file = File(clean);
+    if (file.existsSync()) return FileImage(file);
+  } catch (_) {}
+  return null;
+}
 
 class AppTheme {
   // Base Surface Colors

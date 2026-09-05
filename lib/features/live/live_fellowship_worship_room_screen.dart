@@ -4,6 +4,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_card.dart';
 import '../../core/widgets/sanctuary_chips_badges.dart';
 import '../../core/providers/mock_auth_provider.dart';
+import '../../core/providers/agora_chat_provider.dart';
+import '../../core/config/agora_config.dart';
 import '../auth/login_signup_modal.dart';
 
 class LiveFellowshipWorshipRoomScreen extends ConsumerStatefulWidget {
@@ -14,14 +16,8 @@ class LiveFellowshipWorshipRoomScreen extends ConsumerStatefulWidget {
 }
 
 class _LiveFellowshipWorshipRoomScreenState extends ConsumerState<LiveFellowshipWorshipRoomScreen> {
-  final List<String> _liveChatStream = [
-    'Sister Maya: Hallelujah! Amen to John 15!',
-    'Brother David: Praying for all saints tuned in tonight.',
-    'Sister Grace: Praise God for His abiding mercy.',
-    'Elder Joseph: Amen! The True Vine feeds us.',
-  ];
-
   final TextEditingController _chatController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
 
   void _handleSendLiveMessage() {
     final authState = ref.read(mockAuthNotifierProvider);
@@ -30,22 +26,40 @@ class _LiveFellowshipWorshipRoomScreenState extends ConsumerState<LiveFellowship
       return;
     }
 
-    if (_chatController.text.trim().isEmpty) return;
+    final text = _chatController.text.trim();
+    if (text.isEmpty) return;
 
-    setState(() {
-      _liveChatStream.add('You: ${_chatController.text.trim()}');
-      _chatController.clear();
+    ref
+        .read(liveRoomChatProvider(AgoraConfig.liveWorshipRoomId).notifier)
+        .sendRoomMessage(text);
+
+    _chatController.clear();
+    _scrollToBottom();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
     });
   }
 
   @override
   void dispose() {
     _chatController.dispose();
+    _scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final chatMessages = ref.watch(liveRoomChatProvider(AgoraConfig.liveWorshipRoomId));
+
     return Scaffold(
       backgroundColor: AppTheme.background,
       appBar: AppBar(
@@ -53,12 +67,12 @@ class _LiveFellowshipWorshipRoomScreenState extends ConsumerState<LiveFellowship
         elevation: 0,
         title: const Row(
           children: [
-            LiveBadge(label: 'WORSHIP ROOM'),
+            LiveBadge(label: 'AGORA LIVE ROOM'),
             SizedBox(width: 10),
             Text(
               'Evening Psalm Chant',
               style: TextStyle(
-                fontSize: 16,
+                fontSize: 15,
                 fontWeight: FontWeight.bold,
                 color: AppTheme.onSurface,
               ),
@@ -159,7 +173,7 @@ class _LiveFellowshipWorshipRoomScreenState extends ConsumerState<LiveFellowship
                         Icon(Icons.graphic_eq, color: AppTheme.primaryContainer, size: 14),
                         SizedBox(width: 6),
                         Text(
-                          'HD Audio Sanctum',
+                          'Agora Live Audio',
                           style: TextStyle(fontSize: 11, color: AppTheme.onSurface),
                         ),
                       ],
@@ -180,16 +194,22 @@ class _LiveFellowshipWorshipRoomScreenState extends ConsumerState<LiveFellowship
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const Text(
-                        'Live Prayer Chat',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.primaryContainer,
-                        ),
+                      const Row(
+                        children: [
+                          Icon(Icons.forum_outlined, size: 16, color: AppTheme.primaryContainer),
+                          SizedBox(width: 6),
+                          Text(
+                            'Agora Live Room Chat',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.primaryContainer,
+                            ),
+                          ),
+                        ],
                       ),
                       Text(
-                        '${_liveChatStream.length} Messages',
+                        '${chatMessages.length} Messages',
                         style: const TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant),
                       ),
                     ],
@@ -198,25 +218,51 @@ class _LiveFellowshipWorshipRoomScreenState extends ConsumerState<LiveFellowship
 
                   Expanded(
                     child: ListView.builder(
-                      itemCount: _liveChatStream.length,
+                      controller: _scrollController,
+                      itemCount: chatMessages.length,
                       itemBuilder: (context, index) {
-                        final msg = _liveChatStream[index];
-                        final isMe = msg.startsWith('You:');
+                        final msg = chatMessages[index];
 
                         return Padding(
                           padding: const EdgeInsets.only(bottom: 8.0),
                           child: GlassCard(
                             level: GlassLevel.level1,
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            customSurfaceColor: isMe
+                            customSurfaceColor: msg.isMe
                                 ? AppTheme.primaryContainer.withValues(alpha: 0.15)
                                 : AppTheme.surfaceLow.withValues(alpha: 0.6),
-                            child: Text(
-                              msg,
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: isMe ? AppTheme.primary : AppTheme.onSurface,
-                              ),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: RichText(
+                                    text: TextSpan(
+                                      children: [
+                                        TextSpan(
+                                          text: '${msg.senderName}: ',
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.primaryContainer,
+                                          ),
+                                        ),
+                                        TextSpan(
+                                          text: msg.content,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            color: msg.isMe ? AppTheme.primary : AppTheme.onSurface,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  msg.formattedTime,
+                                  style: const TextStyle(fontSize: 9, color: AppTheme.onSurfaceVariant),
+                                ),
+                              ],
                             ),
                           ),
                         );
@@ -261,8 +307,9 @@ class _LiveFellowshipWorshipRoomScreenState extends ConsumerState<LiveFellowship
                           child: TextField(
                             controller: _chatController,
                             style: const TextStyle(fontSize: 13, color: AppTheme.onSurface),
+                            onSubmitted: (_) => _handleSendLiveMessage(),
                             decoration: const InputDecoration(
-                              hintText: 'Send a prayer or encouragement...',
+                              hintText: 'Send a prayer via Agora Chat...',
                               hintStyle: TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
                               border: InputBorder.none,
                               contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),

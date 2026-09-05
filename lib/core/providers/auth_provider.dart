@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 import '../services/firebase_auth_service.dart';
+import '../services/firebase_storage_service.dart';
 
 enum AuthStatus { guest, authenticated }
 
@@ -50,6 +52,28 @@ class UserProfile {
       versesReadCount: 310,
       sermonNotesCount: 24,
       prayersSharedCount: 12,
+    );
+  }
+
+  UserProfile copyWith({
+    String? id,
+    String? name,
+    String? email,
+    String? avatarUrl,
+    int? streakDays,
+    int? versesReadCount,
+    int? sermonNotesCount,
+    int? prayersSharedCount,
+  }) {
+    return UserProfile(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      email: email ?? this.email,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
+      streakDays: streakDays ?? this.streakDays,
+      versesReadCount: versesReadCount ?? this.versesReadCount,
+      sermonNotesCount: sermonNotesCount ?? this.sermonNotesCount,
+      prayersSharedCount: prayersSharedCount ?? this.prayersSharedCount,
     );
   }
 }
@@ -109,24 +133,24 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final initialUser = _authService.currentUser;
       if (initialUser != null) {
         state = state.copyWith(
-          status: AuthStatus.authenticated,
+          status: initialUser.isAnonymous ? AuthStatus.guest : AuthStatus.authenticated,
           profile: UserProfile.fromFirebaseUser(initialUser),
         );
+      } else {
+        // Automatically trigger Firebase Anonymous Auth on launch
+        _authService.signInAnonymously();
       }
 
       _authSubscription = _authService.authStateChanges.listen((user) {
         if (user != null) {
           state = state.copyWith(
-            status: AuthStatus.authenticated,
+            status: user.isAnonymous ? AuthStatus.guest : AuthStatus.authenticated,
             profile: UserProfile.fromFirebaseUser(user),
             clearError: true,
           );
         } else {
-          // If signed out of Firebase
-          state = const AuthState(
-            status: AuthStatus.guest,
-            profile: UserProfile.guestDefault,
-          );
+          // If signed out, re-trigger anonymous auth so a valid UID is always present
+          _authService.signInAnonymously();
         }
       }, onError: (err) {
         debugPrint('Auth listener error: $err');
@@ -142,7 +166,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     super.dispose();
   }
 
-  /// Sign up with Email, Password, and Display Name via Firebase Auth.
+  /// Sign up with Email, Password, and Display Name via Firebase Auth (linking anonymous user if active).
   Future<bool> signup({
     required String name,
     required String email,
@@ -151,7 +175,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = state.copyWith(isLoading: true, clearError: true);
 
     try {
-      final credential = await _authService.signUpWithEmailAndPassword(
+      final credential = await _authService.linkWithEmailCredential(
         email: email,
         password: password,
         displayName: name,
@@ -245,6 +269,36 @@ class AuthNotifier extends StateNotifier<AuthState> {
         isLoading: false,
         errorMessage: e.toString(),
       );
+      return false;
+    }
+  }
+
+  /// Update User Profile Avatar image
+  Future<bool> updateProfileAvatar(XFile imageFile) async {
+    state = state.copyWith(isLoading: true);
+    try {
+      final storageService = FirebaseStorageService();
+      final uploadedUrl = await storageService.uploadPostImage(
+        imageFile: imageFile,
+        userId: state.profile.id,
+      );
+
+      final newAvatarUrl = uploadedUrl ?? imageFile.path;
+
+      try {
+        await FirebaseAuth.instance.currentUser?.updatePhotoURL(newAvatarUrl);
+      } catch (e) {
+        debugPrint('Firebase Auth updatePhotoURL error: $e');
+      }
+
+      state = state.copyWith(
+        isLoading: false,
+        profile: state.profile.copyWith(avatarUrl: newAvatarUrl),
+      );
+      return true;
+    } catch (e) {
+      debugPrint('updateProfileAvatar error: $e');
+      state = state.copyWith(isLoading: false, errorMessage: e.toString());
       return false;
     }
   }
