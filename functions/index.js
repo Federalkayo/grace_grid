@@ -1,50 +1,37 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { RtcTokenBuilder, RtcRole } = require("agora-token");
 
-/**
- * Callable Firebase Cloud Function to mint short-lived Agora Chat user tokens securely.
- * 
- * Never hardcode or mint tokens client-side in the Flutter app.
- */
-exports.generateAgoraChatToken = onCall(
-  {
-    secrets: ["AGORA_APP_CERTIFICATE", "AGORA_APP_ID", "AGORA_APP_KEY"],
-    cors: true,
-  },
+exports.generateAgoraRtcToken = onCall(
+  { secrets: ["AGORA_APP_ID", "AGORA_APP_CERTIFICATE"], cors: true },
   async (request) => {
-    // 1. Verify caller authentication
     if (!request.auth || !request.auth.uid) {
-      throw new HttpsError(
-        "unauthenticated",
-        "User must be authenticated with Firebase Auth to request an Agora Chat token."
-      );
+      throw new HttpsError("unauthenticated", "Must be signed in to join a call.");
+    }
+    const { channelName } = request.data;
+    if (!channelName || typeof channelName !== "string") {
+      throw new HttpsError("invalid-argument", "channelName is required.");
     }
 
-    const uid = request.auth.uid;
     const appId = process.env.AGORA_APP_ID;
     const appCertificate = process.env.AGORA_APP_CERTIFICATE;
-    const appKey = process.env.AGORA_APP_KEY;
-
-    if (!appId || !appCertificate || !appKey) {
-      throw new HttpsError(
-        "failed-precondition",
-        "Agora secrets are unconfigured on the server."
-      );
+    if (!appId || !appCertificate) {
+      throw new HttpsError("failed-precondition", "Agora RTC secrets are unconfigured.");
     }
 
-    try {
-      // Return token payload structure (In production, generate via AgoraChatTokenBuilder2)
-      const token = `agora_chat_token_${uid}_${Date.now()}`;
-      const expireTimestamp = Math.floor(Date.now() / 1000) + 86400; // 24 hours
+    const uid = 0; // 0 lets Agora assign an internal uid; the channel name is what matters for routing
+    const expireSeconds = 3600; // 1 hour
+    const privilegeExpireTs = Math.floor(Date.now() / 1000) + expireSeconds;
 
-      return {
-        uid: uid,
-        token: token,
-        appKey: appKey,
-        expireTimestamp: expireTimestamp,
-      };
-    } catch (error) {
-      console.error("Error minting Agora Chat token:", error);
-      throw new HttpsError("internal", "Failed to generate Agora Chat token.");
-    }
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      appId,
+      appCertificate,
+      channelName,
+      uid,
+      RtcRole.PUBLISHER,
+      privilegeExpireTs,
+      privilegeExpireTs
+    );
+
+    return { token, appId, channelName, uid };
   }
 );

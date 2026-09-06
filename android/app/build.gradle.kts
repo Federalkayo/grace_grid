@@ -9,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.example.grace_grid"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
