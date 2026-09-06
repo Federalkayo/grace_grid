@@ -1,25 +1,43 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:agora_rtc_engine/agora_rtc_engine.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_card.dart';
 import '../../core/widgets/sanctuary_chips_badges.dart';
+import '../../core/providers/mock_auth_provider.dart';
+import '../../core/services/chat_firestore_service.dart';
+import '../../core/services/call_signaling_service.dart';
 
-class VoicePrayerCallScreen extends StatefulWidget {
+class VoicePrayerCallScreen extends ConsumerStatefulWidget {
+  final String partnerId;
   final String partnerName;
+  final bool isIncoming;
 
   const VoicePrayerCallScreen({
     super.key,
+    required this.partnerId,
     required this.partnerName,
+    this.isIncoming = false,
   });
 
   @override
-  State<VoicePrayerCallScreen> createState() => _VoicePrayerCallScreenState();
+  ConsumerState<VoicePrayerCallScreen> createState() => _VoicePrayerCallScreenState();
 }
 
-class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with SingleTickerProviderStateMixin {
+class _VoicePrayerCallScreenState extends ConsumerState<VoicePrayerCallScreen> with SingleTickerProviderStateMixin {
   late AnimationController _pulseController;
   late Animation<double> _scaleAnimation;
+  RtcEngine? _engine;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _signalingSubscription;
   bool _isMuted = false;
   bool _isSpeaker = true;
+  bool _callConnected = false;
+  bool _isEnding = false;
+  String _statusText = 'Connecting...';
 
   @override
   void initState() {
@@ -32,11 +50,93 @@ class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with Sing
     _scaleAnimation = Tween<double>(begin: 1.0, end: 1.25).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
+
+    _startCall();
+  }
+
+  Future<void> _startCall() async {
+    final authProfile = ref.read(mockAuthNotifierProvider).profile;
+    final chatId = ChatFirestoreService.getChatId(authProfile.id, widget.partnerId);
+
+    if (!widget.isIncoming) {
+      await CallSignalingService().startCall(
+        chatId: chatId,
+        callerId: authProfile.id,
+        calleeId: widget.partnerId,
+      );
+    }
+
+    try {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('generateAgoraRtcToken')
+          .call({'channelName': chatId});
+      final data = result.data as Map;
+
+      final engine = createAgoraRtcEngine();
+      await engine.initialize(RtcEngineContext(appId: data['appId'] as String));
+      engine.registerEventHandler(RtcEngineEventHandler(
+        onJoinChannelSuccess: (connection, elapsed) {
+          if (mounted) {
+            setState(() {
+              _callConnected = true;
+              _statusText = 'Encrypted Intercession Connected ✅';
+            });
+          }
+        },
+        onUserOffline: (connection, remoteUid, reason) => _endCall(),
+        onError: (err, msg) {
+          debugPrint('Agora RTC Error: $err $msg');
+        },
+      ));
+
+      await engine.enableAudio();
+      await engine.joinChannel(
+        token: data['token'] as String,
+        channelId: chatId,
+        uid: 0,
+        options: const ChannelMediaOptions(
+          clientRoleType: ClientRoleType.clientRoleBroadcaster,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
+        ),
+      );
+      _engine = engine;
+
+      // Watch for the other party declining/ending
+      _signalingSubscription = CallSignalingService().watchCall(chatId).listen((snap) {
+        final status = snap.data()?['status'];
+        if (status == 'declined' || status == 'ended') {
+          _endCall();
+        }
+      });
+    } catch (e) {
+      debugPrint('Exception setting up call engine: $e');
+      if (mounted) {
+        setState(() => _statusText = 'Call Connection Error');
+      }
+    }
+  }
+
+  Future<void> _endCall() async {
+    if (_isEnding) return;
+    _isEnding = true;
+    _signalingSubscription?.cancel();
+    final authProfile = ref.read(mockAuthNotifierProvider).profile;
+    final chatId = ChatFirestoreService.getChatId(authProfile.id, widget.partnerId);
+    await CallSignalingService().endCall(chatId);
+    await _engine?.leaveChannel();
+    await _engine?.release();
+    _engine = null;
+    if (mounted) {
+      Navigator.of(context).pop();
+    }
   }
 
   @override
   void dispose() {
     _pulseController.dispose();
+    _signalingSubscription?.cancel();
+    _engine?.leaveChannel();
+    _engine?.release();
     super.dispose();
   }
 
@@ -55,22 +155,19 @@ class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with Sing
                 children: [
                   IconButton(
                     icon: const Icon(Icons.keyboard_arrow_down, color: AppTheme.onSurface, size: 28),
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: _endCall,
                   ),
-                  const Column(
+                  Column(
                     children: [
-                      LiveBadge(label: 'AUDIO SANCTUM'),
-                      SizedBox(height: 4),
+                      const LiveBadge(label: 'AUDIO SANCTUM'),
+                      const SizedBox(height: 4),
                       Text(
-                        '08:42 • Encrypted Intercession',
-                        style: TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
+                        _statusText,
+                        style: const TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
                       ),
                     ],
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.person_add_outlined, color: AppTheme.onSurfaceVariant),
-                    onPressed: () {},
-                  ),
+                  const SizedBox(width: 48), // Spacer balance for header
                 ],
               ),
             ),
@@ -125,7 +222,7 @@ class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with Sing
                     ),
                     child: Center(
                       child: Text(
-                        widget.partnerName[0],
+                        widget.partnerName.isNotEmpty ? widget.partnerName[0].toUpperCase() : 'P',
                         style: const TextStyle(
                           fontSize: 36,
                           fontWeight: FontWeight.bold,
@@ -147,9 +244,9 @@ class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with Sing
                   ),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Praying in One Accord',
-              style: TextStyle(fontSize: 14, color: AppTheme.primaryContainer),
+            Text(
+              _callConnected ? 'Praying in One Accord' : 'Ringing...',
+              style: const TextStyle(fontSize: 14, color: AppTheme.primaryContainer),
             ),
 
             const Spacer(),
@@ -199,7 +296,10 @@ class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with Sing
                 children: [
                   // Mute
                   GestureDetector(
-                    onTap: () => setState(() => _isMuted = !_isMuted),
+                    onTap: () async {
+                      setState(() => _isMuted = !_isMuted);
+                      await _engine?.muteLocalAudioStream(_isMuted);
+                    },
                     child: Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -216,7 +316,7 @@ class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with Sing
 
                   // End Call Button
                   GestureDetector(
-                    onTap: () => Navigator.of(context).pop(),
+                    onTap: _endCall,
                     child: Container(
                       padding: const EdgeInsets.all(20),
                       decoration: const BoxDecoration(
@@ -236,7 +336,10 @@ class _VoicePrayerCallScreenState extends State<VoicePrayerCallScreen> with Sing
 
                   // Speaker
                   GestureDetector(
-                    onTap: () => setState(() => _isSpeaker = !_isSpeaker),
+                    onTap: () async {
+                      setState(() => _isSpeaker = !_isSpeaker);
+                      await _engine?.setEnableSpeakerphone(_isSpeaker);
+                    },
                     child: Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(

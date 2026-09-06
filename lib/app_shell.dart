@@ -1,17 +1,31 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme/app_theme.dart';
 import 'core/providers/mock_auth_provider.dart';
 import 'core/providers/navigation_provider.dart';
+import 'core/services/call_signaling_service.dart';
 import 'features/auth/login_signup_modal.dart';
 import 'features/bible/bible_reader_screen.dart';
 import 'features/sermon/sermon_studio_screen.dart';
 import 'features/feed/sanctuary_community_feed_screen.dart';
+import 'features/fellowship/voice_prayer_call_screen.dart';
 import 'features/live/live_fellowship_worship_room_screen.dart';
 import 'features/profile/profile_journey_hub_screen.dart';
 
-class AppShell extends ConsumerWidget {
+class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key});
+
+  @override
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> {
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _callSubscription;
+  String? _listeningUid;
+  String? _activeRingingChatId;
+  BuildContext? _incomingDialogContext;
 
   static const List<Widget> _screens = [
     BibleReaderScreen(),
@@ -21,16 +35,171 @@ class AppShell extends ConsumerWidget {
     ProfileJourneyHubScreen(),
   ];
 
+  @override
+  void dispose() {
+    _callSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _listenForIncomingCalls(String myUid) {
+    if (myUid == _listeningUid) return;
+    _callSubscription?.cancel();
+    _listeningUid = myUid;
+
+    if (myUid.isEmpty || myUid == 'guest') return;
+
+    _callSubscription = FirebaseFirestore.instance
+        .collection('calls')
+        .where('calleeId', isEqualTo: myUid)
+        .where('status', isEqualTo: 'ringing')
+        .snapshots()
+        .listen((snapshot) {
+      if (snapshot.docs.isNotEmpty) {
+        final doc = snapshot.docs.first;
+        final chatId = doc.id;
+        final callerId = doc.data()['callerId'] as String? ?? '';
+        if (_activeRingingChatId != chatId) {
+          _activeRingingChatId = chatId;
+          _showIncomingCallDialog(chatId, callerId);
+        }
+      } else {
+        if (_activeRingingChatId != null) {
+          _activeRingingChatId = null;
+          if (_incomingDialogContext != null && mounted) {
+            Navigator.of(_incomingDialogContext!).pop();
+            _incomingDialogContext = null;
+          }
+        }
+      }
+    });
+  }
+
+  Future<void> _showIncomingCallDialog(String chatId, String callerId) async {
+    String callerName = 'Fellow Believer';
+    try {
+      final userDoc = await FirebaseFirestore.instance.collection('users').doc(callerId).get();
+      if (userDoc.exists && userDoc.data()?['name'] != null) {
+        callerName = userDoc.data()!['name'] as String;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        _incomingDialogContext = dialogContext;
+        return Dialog(
+          backgroundColor: AppTheme.surfaceLow,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          child: Padding(
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primaryContainer.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(9999),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.phone_in_talk, size: 14, color: AppTheme.primaryContainer),
+                      SizedBox(width: 6),
+                      Text(
+                        'INCOMING AUDIO CALL',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primaryContainer),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+                CircleAvatar(
+                  radius: 36,
+                  backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
+                  child: Text(
+                    callerName.isNotEmpty ? callerName[0].toUpperCase() : 'C',
+                    style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: AppTheme.primaryContainer),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  callerName,
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.onSurface),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Inviting you to pray in one accord',
+                  style: TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 28),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    // Decline
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppTheme.errorContainer,
+                        padding: const EdgeInsets.all(16),
+                      ),
+                      icon: const Icon(Icons.call_end, color: AppTheme.error, size: 28),
+                      onPressed: () async {
+                        _incomingDialogContext = null;
+                        _activeRingingChatId = null;
+                        Navigator.of(dialogContext).pop();
+                        await CallSignalingService().updateStatus(chatId, CallStatus.declined);
+                      },
+                    ),
+                    // Accept
+                    IconButton.filled(
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppTheme.emeraldStrokeAlpha25,
+                        padding: const EdgeInsets.all(16),
+                      ),
+                      icon: const Icon(Icons.call, color: AppTheme.primaryContainer, size: 28),
+                      onPressed: () async {
+                        _incomingDialogContext = null;
+                        _activeRingingChatId = null;
+                        Navigator.of(dialogContext).pop();
+                        await CallSignalingService().updateStatus(chatId, CallStatus.accepted);
+                        if (mounted) {
+                          Navigator.of(context).push(
+                            MaterialPageRoute(
+                              builder: (_) => VoicePrayerCallScreen(
+                                partnerId: callerId,
+                                partnerName: callerName,
+                                isIncoming: true,
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ).then((_) {
+      _incomingDialogContext = null;
+    });
+  }
+
   void _onTabTapped(BuildContext context, WidgetRef ref, int targetIndex) {
     final authState = ref.read(mockAuthNotifierProvider);
 
-    // Gated tabs: Live (2) and Feed (3) require soft-gate if unauthenticated
     final bool isGatedTab = (targetIndex == 2 || targetIndex == 3);
 
     if (isGatedTab && authState.isGuest) {
       final tabName = targetIndex == 2 ? 'Live Worship Rooms' : 'Community Feed';
       LoginSignupModal.show(context, gatedActionTitle: 'access $tabName').then((_) {
-        // Check if user authenticated during the modal interaction
         final updatedAuth = ref.read(mockAuthNotifierProvider);
         if (updatedAuth.isAuthenticated) {
           ref.read(navigationProvider.notifier).setTab(targetIndex);
@@ -42,8 +211,13 @@ class AppShell extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final currentTab = ref.watch(navigationProvider);
+    final authState = ref.watch(mockAuthNotifierProvider);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _listenForIncomingCalls(authState.profile.id);
+    });
 
     return Scaffold(
       body: IndexedStack(

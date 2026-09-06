@@ -10,7 +10,6 @@ import '../feed/providers/feed_provider.dart';
 import '../../core/data/mock_community_data.dart';
 import '../../core/services/chat_firestore_service.dart';
 import 'fellowship_chat_screen.dart';
-import 'rtc_test_screen.dart';
 
 class FellowshipConversationsScreen extends ConsumerStatefulWidget {
   const FellowshipConversationsScreen({super.key});
@@ -387,15 +386,6 @@ class _FellowshipConversationsScreenState
           ),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.bug_report, color: AppTheme.primaryContainer),
-            tooltip: 'RTC Plumbing Test',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const RtcTestScreen()),
-              );
-            },
-          ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             margin: const EdgeInsets.only(right: 12),

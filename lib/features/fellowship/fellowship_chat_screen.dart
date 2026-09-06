@@ -465,7 +465,10 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) => VoicePrayerCallScreen(partnerName: _effectivePartnerName),
+                  builder: (context) => VoicePrayerCallScreen(
+                    partnerId: _effectivePartnerId,
+                    partnerName: _effectivePartnerName,
+                  ),
                 ),
               );
             },
