@@ -480,7 +480,10 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
-                  builder: (context) => VideoFellowshipCallScreen(partnerName: _effectivePartnerName),
+                  builder: (context) => VideoFellowshipCallScreen(
+                    partnerId: _effectivePartnerId,
+                    partnerName: _effectivePartnerName,
+                  ),
                 ),
               );
             },

@@ -11,6 +11,7 @@ import 'features/bible/bible_reader_screen.dart';
 import 'features/sermon/sermon_studio_screen.dart';
 import 'features/feed/sanctuary_community_feed_screen.dart';
 import 'features/fellowship/voice_prayer_call_screen.dart';
+import 'features/fellowship/video_fellowship_call_screen.dart';
 import 'features/live/live_fellowship_worship_room_screen.dart';
 import 'features/profile/profile_journey_hub_screen.dart';
 
@@ -58,9 +59,10 @@ class _AppShellState extends ConsumerState<AppShell> {
         final doc = snapshot.docs.first;
         final chatId = doc.id;
         final callerId = doc.data()['callerId'] as String? ?? '';
+        final callType = doc.data()['callType'] as String? ?? 'voice';
         if (_activeRingingChatId != chatId) {
           _activeRingingChatId = chatId;
-          _showIncomingCallDialog(chatId, callerId);
+          _showIncomingCallDialog(chatId, callerId, callType);
         }
       } else {
         if (_activeRingingChatId != null) {
@@ -74,7 +76,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     });
   }
 
-  Future<void> _showIncomingCallDialog(String chatId, String callerId) async {
+  Future<void> _showIncomingCallDialog(String chatId, String callerId, String callType) async {
     String callerName = 'Fellow Believer';
     try {
       final userDoc = await FirebaseFirestore.instance.collection('users').doc(callerId).get();
@@ -84,6 +86,8 @@ class _AppShellState extends ConsumerState<AppShell> {
     } catch (_) {}
 
     if (!mounted) return;
+
+    final isVideo = callType == 'video';
 
     showDialog(
       context: context,
@@ -104,14 +108,14 @@ class _AppShellState extends ConsumerState<AppShell> {
                     color: AppTheme.primaryContainer.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(9999),
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.phone_in_talk, size: 14, color: AppTheme.primaryContainer),
-                      SizedBox(width: 6),
+                      Icon(isVideo ? Icons.videocam : Icons.phone_in_talk, size: 14, color: AppTheme.primaryContainer),
+                      const SizedBox(width: 6),
                       Text(
-                        'INCOMING AUDIO CALL',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primaryContainer),
+                        isVideo ? 'INCOMING VIDEO CALL' : 'INCOMING AUDIO CALL',
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.primaryContainer),
                       ),
                     ],
                   ),
@@ -132,9 +136,9 @@ class _AppShellState extends ConsumerState<AppShell> {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 6),
-                const Text(
-                  'Inviting you to pray in one accord',
-                  style: TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
+                Text(
+                  isVideo ? 'Inviting you to video fellowship' : 'Inviting you to pray in one accord',
+                  style: const TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 28),
@@ -161,22 +165,34 @@ class _AppShellState extends ConsumerState<AppShell> {
                         backgroundColor: AppTheme.emeraldStrokeAlpha25,
                         padding: const EdgeInsets.all(16),
                       ),
-                      icon: const Icon(Icons.call, color: AppTheme.primaryContainer, size: 28),
+                      icon: Icon(isVideo ? Icons.videocam : Icons.call, color: AppTheme.primaryContainer, size: 28),
                       onPressed: () async {
                         _incomingDialogContext = null;
                         _activeRingingChatId = null;
                         Navigator.of(dialogContext).pop();
                         await CallSignalingService().updateStatus(chatId, CallStatus.accepted);
                         if (mounted) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(
-                              builder: (_) => VoicePrayerCallScreen(
-                                partnerId: callerId,
-                                partnerName: callerName,
-                                isIncoming: true,
+                          if (callType == 'video') {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => VideoFellowshipCallScreen(
+                                  partnerId: callerId,
+                                  partnerName: callerName,
+                                  isIncoming: true,
+                                ),
                               ),
-                            ),
-                          );
+                            );
+                          } else {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => VoicePrayerCallScreen(
+                                  partnerId: callerId,
+                                  partnerName: callerName,
+                                  isIncoming: true,
+                                ),
+                              ),
+                            );
+                          }
                         }
                       },
                     ),

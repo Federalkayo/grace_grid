@@ -10,11 +10,13 @@ class CallSignalingService {
     required String chatId,
     required String callerId,
     required String calleeId,
+    String callType = 'voice',
   }) async {
     await _callsRef.doc(chatId).set({
       'callerId': callerId,
       'calleeId': calleeId,
       'status': 'ringing',
+      'callType': callType,
       'startedAt': FieldValue.serverTimestamp(),
     });
   }
