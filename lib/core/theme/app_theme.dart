@@ -176,10 +176,10 @@ class AppTheme {
     );
   }
 
-  static TextStyle get scriptureStyle => GoogleFonts.inter(
-        fontSize: 17,
+  static TextStyle get scriptureStyle => GoogleFonts.ebGaramond(
+        fontSize: 21,
         fontWeight: FontWeight.w400,
-        height: 28 / 17,
+        height: 1.8,
         letterSpacing: 0.17,
         color: scriptureIvory,
       );

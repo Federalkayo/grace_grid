@@ -24,7 +24,7 @@ class BibleState {
     this.selectedBook,
     this.selectedChapter = 3,
     this.targetVerseNumber,
-    this.fontSize = 17.0,
+    this.fontSize = 21.0,
     this.themeMode = 'Sanctuary Dark',
     this.books = const [],
     this.verses = const [],

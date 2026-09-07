@@ -1233,7 +1233,7 @@ class _BibleReaderScreenState extends ConsumerState<BibleReaderScreen> {
                                   child: Text(
                                     '${verse.verse}',
                                     style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 12,
                                       fontWeight: FontWeight.bold,
                                       color: verse.isBookmarked || isTargetVerse ? AppTheme.onPrimary : AppTheme.primaryContainer,
                                     ),
@@ -1244,7 +1244,7 @@ class _BibleReaderScreenState extends ConsumerState<BibleReaderScreen> {
                                 text: verse.text,
                                 style: AppTheme.scriptureStyle.copyWith(
                                   fontSize: state.fontSize,
-                                  height: 1.65,
+                                  height: 1.8,
                                 ),
                               ),
                             ],
