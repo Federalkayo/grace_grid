@@ -30,69 +30,156 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
 
     final bool? withVideo = await showModalBottomSheet<bool>(
       context: context,
+      isScrollControlled: true,
       backgroundColor: AppTheme.surfaceLow,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppTheme.onSurfaceVariant.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 20),
-              const Text(
-                'Start Live Worship Stream',
-                style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.onSurface,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Choose how you would like to minister to the community today.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
-              ),
-              const SizedBox(height: 24),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: const BoxDecoration(
-                    color: AppTheme.surfaceHighest,
-                    shape: BoxShape.circle,
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 20,
+              bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: AppTheme.onSurfaceVariant.withValues(alpha: 0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
                   ),
-                  child: const Icon(Icons.mic, color: AppTheme.primaryContainer),
-                ),
-                title: const Text('Audio-Only Broadcast', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: const Text('Stream worship audio, prayers & chants'),
-                onTap: () => Navigator.pop(context, false),
-              ),
-              const Divider(height: 16),
-              ListTile(
-                leading: Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: const BoxDecoration(
-                    color: AppTheme.surfaceHighest,
-                    shape: BoxShape.circle,
+                  const SizedBox(height: 16),
+                  const Row(
+                    children: [
+                      LiveBadge(label: 'NEW'),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Select Stream Mode',
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.onSurface,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                  child: const Icon(Icons.videocam, color: AppTheme.primaryContainer),
-                ),
-                title: const Text('Video + Audio Broadcast', style: TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: const Text('Live video camera feed & audio stream'),
-                onTap: () => Navigator.pop(context, true),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Choose how you would like to minister and fellowship with the community.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant, height: 1.35),
+                  ),
+                  const SizedBox(height: 16),
+                  InkWell(
+                    onTap: () => Navigator.pop(context, false),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceHighest.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primaryContainer.withValues(alpha: 0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.mic_rounded, color: AppTheme.primaryContainer, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Audio-Only Broadcast',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.onSurface,
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Stream worship audio & intercession chants',
+                                  style: TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.chevron_right, color: AppTheme.primaryContainer, size: 20),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  InkWell(
+                    onTap: () => Navigator.pop(context, true),
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceHighest.withValues(alpha: 0.5),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primaryContainer.withValues(alpha: 0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.videocam_rounded, color: AppTheme.primaryContainer, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Video + Audio Broadcast',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.onSurface,
+                                  ),
+                                ),
+                                SizedBox(height: 2),
+                                Text(
+                                  'Live camera feed with high quality audio',
+                                  style: TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.chevron_right, color: AppTheme.primaryContainer, size: 20),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
               ),
-              const SizedBox(height: 12),
-            ],
+            ),
           ),
         );
       },
@@ -138,79 +225,166 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
       appBar: AppBar(
         backgroundColor: AppTheme.surfaceLow,
         elevation: 0,
+        centerTitle: false,
         title: const Row(
           children: [
-            LiveBadge(label: 'LIVE WORSHIP'),
-            SizedBox(width: 10),
-            Text(
-              'Sanctuary Sanctuary Rooms',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: AppTheme.onSurface,
+            LiveBadge(label: 'LIVE'),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Sanctuary Worship Rooms',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.onSurface,
+                  letterSpacing: -0.3,
+                ),
               ),
             ),
           ],
         ),
       ),
       body: CustomScrollView(
+        physics: const BouncingScrollPhysics(),
         slivers: [
+          // Hero Banner Container
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: GlassCard(
-                level: GlassLevel.level2,
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(20),
+                  gradient: const LinearGradient(
+                    colors: [
+                      Color(0xFF0B2B1B),
+                      Color(0xFF041A0F),
+                      Color(0xFF03100A),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  border: Border.all(
+                    color: AppTheme.primaryContainer.withValues(alpha: 0.35),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.primaryContainer.withValues(alpha: 0.12),
+                      blurRadius: 20,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
                 padding: const EdgeInsets.all(20),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryContainer.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: AppTheme.primaryContainer.withValues(alpha: 0.4)),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Text(
-                            'Worship Sanctuary Live',
+                          Icon(Icons.sensors_rounded, size: 14, color: AppTheme.primaryContainer),
+                          SizedBox(width: 6),
+                          Text(
+                            'REAL-TIME SANCTUARY',
                             style: TextStyle(
-                              fontSize: 18,
+                              fontSize: 10,
                               fontWeight: FontWeight.bold,
-                              color: AppTheme.onSurface,
+                              color: AppTheme.primaryContainer,
+                              letterSpacing: 0.5,
                             ),
-                          ),
-                          const SizedBox(height: 6),
-                          const Text(
-                            'Join live fellowship, prayer chants, or lead a worship broadcast for believers worldwide.',
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AppTheme.onSurfaceVariant,
-                              height: 1.4,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          PrimarySanctuaryButton(
-                            text: 'Go Live Now',
-                            icon: Icons.cell_tower,
-                            onPressed: _handleGoLivePrompt,
                           ),
                         ],
                       ),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Worship & Fellowship Sanctuary',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.onSurface,
+                        letterSpacing: -0.4,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'Join live prayer intercession, spiritual audio chants, or broadcast video to believers globally.',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppTheme.onSurfaceVariant,
+                        height: 1.45,
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    PrimarySanctuaryButton(
+                      text: 'Go Live Now',
+                      icon: Icons.cell_tower,
+                      fullWidth: true,
+                      onPressed: _handleGoLivePrompt,
                     ),
                   ],
                 ),
               ),
             ),
           ),
-          const SliverToBoxAdapter(
+
+          // Section Title Header
+          SliverToBoxAdapter(
             child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-              child: Text(
-                'Active Live Rooms',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.primaryContainer,
-                ),
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.radio_button_checked_rounded, color: Colors.redAccent, size: 16),
+                      SizedBox(width: 6),
+                      Text(
+                        'Active Live Rooms',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: AppTheme.onSurface,
+                          letterSpacing: -0.2,
+                        ),
+                      ),
+                    ],
+                  ),
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: _sessionService.watchActiveRooms(),
+                    builder: (context, snapshot) {
+                      final count = snapshot.data?.docs.length ?? 0;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: AppTheme.surfaceHighest,
+                          borderRadius: BorderRadius.circular(9999),
+                        ),
+                        child: Text(
+                          '$count Active',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.primaryContainer,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
               ),
             ),
           ),
+
+          // Live Rooms List or Empty State
           StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
             stream: _sessionService.watchActiveRooms(),
             builder: (context, snapshot) {
@@ -228,47 +402,52 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                   hasScrollBody: false,
                   child: Center(
                     child: Padding(
-                      padding: const EdgeInsets.all(32.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.graphic_eq_rounded,
-                            size: 64,
-                            color: AppTheme.onSurfaceVariant.withValues(alpha: 0.4),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'No Active Streams Right Now',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.onSurface,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          const Text(
-                            'Be the first believer to initiate a live worship or prayer stream for the community.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: AppTheme.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(height: 20),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppTheme.primaryContainer,
-                              foregroundColor: AppTheme.onPrimary,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(9999),
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 32.0),
+                      child: GlassCard(
+                        level: GlassLevel.level1,
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 36),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryContainer.withValues(alpha: 0.12),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.graphic_eq_rounded,
+                                size: 48,
+                                color: AppTheme.primaryContainer,
                               ),
                             ),
-                            onPressed: _handleGoLivePrompt,
-                            icon: const Icon(Icons.videocam),
-                            label: const Text('Start Stream'),
-                          ),
-                        ],
+                            const SizedBox(height: 18),
+                            const Text(
+                              'No Active Streams Right Now',
+                              style: TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.onSurface,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            const Text(
+                              'Be the first believer or minister to initiate a live worship or prayer stream for the community.',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: AppTheme.onSurfaceVariant,
+                                height: 1.4,
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            PrimarySanctuaryButton(
+                              text: 'Start Stream',
+                              icon: Icons.videocam_rounded,
+                              onPressed: _handleGoLivePrompt,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -292,7 +471,7 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 12.0),
                         child: GlassCard(
-                          level: GlassLevel.level1,
+                          level: GlassLevel.level2,
                           padding: const EdgeInsets.all(16),
                           child: InkWell(
                             onTap: () {
@@ -309,38 +488,48 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                                 ),
                               );
                             },
+                            borderRadius: BorderRadius.circular(16),
                             child: Row(
                               children: [
                                 Stack(
                                   children: [
-                                    CircleAvatar(
-                                      radius: 26,
-                                      backgroundColor: AppTheme.surfaceHighest,
-                                      backgroundImage: hostAvatar.isNotEmpty
-                                          ? NetworkImage(hostAvatar)
-                                          : null,
-                                      child: hostAvatar.isEmpty
-                                          ? Text(
-                                              hostName.isNotEmpty ? hostName[0].toUpperCase() : 'G',
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                color: AppTheme.primaryContainer,
-                                              ),
-                                            )
-                                          : null,
+                                    Container(
+                                      decoration: BoxDecoration(
+                                        shape: BoxShape.circle,
+                                        border: Border.all(
+                                          color: Colors.redAccent,
+                                          width: 2,
+                                        ),
+                                      ),
+                                      child: CircleAvatar(
+                                        radius: 26,
+                                        backgroundColor: AppTheme.surfaceHighest,
+                                        backgroundImage: hostAvatar.isNotEmpty
+                                            ? NetworkImage(hostAvatar)
+                                            : null,
+                                        child: hostAvatar.isEmpty
+                                            ? Text(
+                                                hostName.isNotEmpty ? hostName[0].toUpperCase() : 'G',
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: AppTheme.primaryContainer,
+                                                ),
+                                              )
+                                            : null,
+                                      ),
                                     ),
                                     Positioned(
                                       right: 0,
                                       bottom: 0,
                                       child: Container(
-                                        padding: const EdgeInsets.all(2),
+                                        padding: const EdgeInsets.all(3),
                                         decoration: const BoxDecoration(
                                           color: AppTheme.surfaceLow,
                                           shape: BoxShape.circle,
                                         ),
                                         child: Icon(
                                           hasVideo ? Icons.videocam : Icons.mic,
-                                          size: 14,
+                                          size: 13,
                                           color: AppTheme.primaryContainer,
                                         ),
                                       ),
@@ -357,6 +546,7 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                                           Expanded(
                                             child: Text(
                                               hostName,
+                                              overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
                                                 fontSize: 15,
                                                 fontWeight: FontWeight.bold,
@@ -364,16 +554,17 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                                               ),
                                             ),
                                           ),
+                                          const SizedBox(width: 6),
                                           const LiveBadge(label: 'LIVE'),
                                         ],
                                       ),
-                                      const SizedBox(height: 4),
+                                      const SizedBox(height: 6),
                                       Row(
                                         children: [
                                           Icon(
                                             hasVideo ? Icons.video_call : Icons.graphic_eq,
                                             size: 14,
-                                            color: AppTheme.onSurfaceVariant,
+                                            color: AppTheme.primaryContainer,
                                           ),
                                           const SizedBox(width: 4),
                                           Text(
@@ -386,7 +577,7 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                                           const SizedBox(width: 12),
                                           const Icon(
                                             Icons.favorite,
-                                            size: 14,
+                                            size: 13,
                                             color: Colors.redAccent,
                                           ),
                                           const SizedBox(width: 4),
@@ -394,6 +585,7 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                                             '${likesList.length}',
                                             style: const TextStyle(
                                               fontSize: 12,
+                                              fontWeight: FontWeight.bold,
                                               color: AppTheme.onSurfaceVariant,
                                             ),
                                           ),
@@ -402,9 +594,21 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                                     ],
                                   ),
                                 ),
-                                const Icon(
-                                  Icons.chevron_right,
-                                  color: AppTheme.onSurfaceVariant,
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryContainer.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(9999),
+                                  ),
+                                  child: const Text(
+                                    'Join',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppTheme.primaryContainer,
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),

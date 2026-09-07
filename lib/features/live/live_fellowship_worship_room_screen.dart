@@ -35,13 +35,15 @@ class LiveFellowshipWorshipRoomScreen extends ConsumerStatefulWidget {
 }
 
 class _LiveFellowshipWorshipRoomScreenState
-    extends ConsumerState<LiveFellowshipWorshipRoomScreen> {
+    extends ConsumerState<LiveFellowshipWorshipRoomScreen> with SingleTickerProviderStateMixin {
   final LiveSessionService _sessionService = LiveSessionService();
   final TextEditingController _chatController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _roomSubscription;
   RtcEngine? _engine;
+  late AnimationController _pulseController;
+  late Animation<double> _scaleAnimation;
 
   String? _currentRoomId;
   String? _hostId;
@@ -61,6 +63,15 @@ class _LiveFellowshipWorshipRoomScreenState
     _hostId = widget.hostId;
     _hostName = widget.hostName;
     _hasVideo = widget.hasVideo;
+
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat(reverse: true);
+
+    _scaleAnimation = Tween<double>(begin: 1.0, end: 1.2).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
 
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
     _isHost = widget.isHostStarting || (_hostId != null && _hostId == authProfile.id);
@@ -305,6 +316,7 @@ class _LiveFellowshipWorshipRoomScreenState
 
   @override
   void dispose() {
+    _pulseController.dispose();
     _roomSubscription?.cancel();
     _chatController.dispose();
     _scrollController.dispose();
@@ -324,18 +336,23 @@ class _LiveFellowshipWorshipRoomScreenState
     final bool isLikedByMe = _likedUserIds.contains(authProfile.id);
     final String roomId = _currentRoomId ?? AgoraConfig.liveWorshipRoomId;
 
+    final double keyboardHeight = MediaQuery.of(context).viewInsets.bottom;
+    final bool isKeyboardOpen = keyboardHeight > 0;
+    final double viewportHeight = isKeyboardOpen ? 140.0 : 220.0;
+
     return Scaffold(
       backgroundColor: AppTheme.background,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: AppTheme.surfaceLow,
         elevation: 0,
         title: Row(
           children: [
             LiveBadge(label: _isLive ? 'AGORA LIVE' : 'ROOM'),
-            const SizedBox(width: 10),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
-                _hostName != null ? 'Live with $_hostName' : 'Sanctuary Worship Sanctuary',
+                _hostName != null ? 'Live with $_hostName' : 'Sanctuary Live Worship',
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   fontSize: 15,
@@ -347,402 +364,423 @@ class _LiveFellowshipWorshipRoomScreenState
           ],
         ),
         actions: [
-          IconButton(
-            icon: Icon(
-              isLikedByMe ? Icons.favorite : Icons.favorite_border,
-              color: isLikedByMe ? Colors.redAccent : AppTheme.onSurfaceVariant,
-            ),
-            onPressed: _handleToggleLike,
-          ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.only(right: 12.0),
-              child: Text(
-                '${_likedUserIds.length}',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  isLikedByMe ? Icons.favorite : Icons.favorite_border,
+                  color: isLikedByMe ? Colors.redAccent : AppTheme.onSurfaceVariant,
+                  size: 22,
+                ),
+                onPressed: _handleToggleLike,
               ),
-            ),
+              Padding(
+                padding: const EdgeInsets.only(right: 12.0),
+                child: Text(
+                  '${_likedUserIds.length}',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
           ),
         ],
       ),
-      body: Column(
-        children: [
-          // Live Video / Audio Broadcast Viewport
-          Container(
-            height: 230,
-            width: double.infinity,
-            color: Colors.black,
-            child: Stack(
-              children: [
-                // Video Stream View or Audio Visualizer Background
-                if (_hasVideo && _engine != null) ...[
-                  if (_isHost)
-                    AgoraVideoView(
-                      controller: VideoViewController(
-                        rtcEngine: _engine!,
-                        canvas: const VideoCanvas(uid: 0),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Responsive Viewport (Audio Visualizer or Video Feed)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeOut,
+              height: viewportHeight,
+              width: double.infinity,
+              color: Colors.black,
+              child: Stack(
+                children: [
+                  // Video View or Audio Gradient Representation
+                  if (_hasVideo && _engine != null) ...[
+                    if (_isHost)
+                      AgoraVideoView(
+                        controller: VideoViewController(
+                          rtcEngine: _engine!,
+                          canvas: const VideoCanvas(uid: 0),
+                        ),
+                      )
+                    else if (_remoteHostUid != null)
+                      AgoraVideoView(
+                        controller: VideoViewController.remote(
+                          rtcEngine: _engine!,
+                          canvas: VideoCanvas(uid: _remoteHostUid),
+                          connection: RtcConnection(channelId: roomId),
+                        ),
+                      )
+                    else
+                      const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircularProgressIndicator(color: AppTheme.primaryContainer),
+                            SizedBox(height: 10),
+                            Text(
+                              'Connecting Video Stream...',
+                              style: TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ],
+                        ),
                       ),
-                    )
-                  else if (_remoteHostUid != null)
-                    AgoraVideoView(
-                      controller: VideoViewController.remote(
-                        rtcEngine: _engine!,
-                        canvas: VideoCanvas(uid: _remoteHostUid),
-                        connection: RtcConnection(channelId: roomId),
+                  ] else ...[
+                    // Audio Gradient background
+                    Container(
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xFF07120C), Color(0xFF00391E), Color(0xFF051D14)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
                       ),
-                    )
-                  else
-                    const Center(
+                    ),
+
+                    Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          CircularProgressIndicator(color: AppTheme.primaryContainer),
-                          SizedBox(height: 12),
-                          Text(
-                            'Connecting Video Stream...',
-                            style: TextStyle(color: Colors.white70, fontSize: 13),
+                          ScaleTransition(
+                            scale: _scaleAnimation,
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: _isMuted ? Colors.redAccent : AppTheme.primaryContainer,
+                                  width: 2,
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: (_isMuted ? Colors.redAccent : AppTheme.primaryContainer)
+                                        .withValues(alpha: 0.35),
+                                    blurRadius: 18,
+                                    spreadRadius: 2,
+                                  ),
+                                ],
+                              ),
+                              child: CircleAvatar(
+                                radius: isKeyboardOpen ? 24 : 32,
+                                backgroundColor: AppTheme.surfaceLow,
+                                child: Icon(
+                                  _isMuted ? Icons.mic_off : Icons.mic,
+                                  color: _isMuted ? Colors.redAccent : AppTheme.primaryContainer,
+                                  size: isKeyboardOpen ? 24 : 32,
+                                ),
+                              ),
+                            ),
                           ),
+                          if (!isKeyboardOpen) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              _hostName != null ? '$_hostName Leading' : 'Live Host',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.onSurface,
+                              ),
+                            ),
+                            Text(
+                              _isLive
+                                  ? 'Live Audio Stream • Intercession'
+                                  : 'Stream Offline',
+                              style: const TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
+                            ),
+                          ],
                         ],
                       ),
                     ),
-                ] else ...[
-                  // Audio Gradient representation
-                  Container(
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF07120C), Color(0xFF00391E), Color(0xFF051D14)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                  ),
+                  ],
 
-                  Center(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  // Top Status Controls Bar Overlay
+                  Positioned(
+                    top: 8,
+                    left: 10,
+                    right: 10,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Container(
-                          padding: const EdgeInsets.all(4),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                           decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: _isMuted ? Colors.redAccent : AppTheme.primaryContainer,
-                              width: 2,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: (_isMuted ? Colors.redAccent : AppTheme.primaryContainer)
-                                    .withValues(alpha: 0.3),
-                                blurRadius: 20,
-                                spreadRadius: 2,
+                            color: Colors.black.withValues(alpha: 0.65),
+                            borderRadius: BorderRadius.circular(9999),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _hasVideo ? Icons.videocam : Icons.graphic_eq,
+                                color: AppTheme.primaryContainer,
+                                size: 14,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                _isLive
+                                    ? (_hasVideo ? 'Live Video Stream' : 'Live Audio Stream')
+                                    : 'Offline',
+                                style: const TextStyle(fontSize: 11, color: AppTheme.onSurface),
                               ),
                             ],
                           ),
-                          child: CircleAvatar(
-                            radius: 36,
-                            backgroundColor: AppTheme.surfaceLow,
-                            child: Icon(
-                              _isMuted ? Icons.mic_off : Icons.mic,
-                              color: _isMuted ? Colors.redAccent : AppTheme.primaryContainer,
-                              size: 36,
+                        ),
+                        if (_isHost)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              GestureDetector(
+                                onTap: _toggleMute,
+                                child: Container(
+                                  padding: const EdgeInsets.all(7),
+                                  decoration: BoxDecoration(
+                                    color: _isMuted
+                                        ? Colors.redAccent.withValues(alpha: 0.8)
+                                        : Colors.black.withValues(alpha: 0.65),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Icon(
+                                    _isMuted ? Icons.mic_off : Icons.mic,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              GestureDetector(
+                                onTap: _endLive,
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    color: Colors.redAccent,
+                                    borderRadius: BorderRadius.circular(9999),
+                                  ),
+                                  child: const Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(Icons.call_end, color: Colors.white, size: 13),
+                                      SizedBox(width: 4),
+                                      Text(
+                                        'End',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        else if (!_isLive)
+                          GestureDetector(
+                            onTap: () => _startHostStream(withVideo: _hasVideo),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(9999),
+                              ),
+                              child: const Text(
+                                'Go Live',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.onPrimary,
+                                ),
+                              ),
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          _hostName != null ? '$_hostName Leading' : 'Live Host',
-                          style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.onSurface,
-                          ),
-                        ),
-                        Text(
-                          _isLive
-                              ? 'Live Audio Stream • Psalms & Intercession'
-                              : 'Stream Offline',
-                          style: const TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant),
-                        ),
                       ],
                     ),
                   ),
                 ],
-
-                // Top Controls & Status Bar Overlay
-                Positioned(
-                  top: 12,
-                  left: 12,
-                  right: 12,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.6),
-                          borderRadius: BorderRadius.circular(9999),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              _hasVideo ? Icons.videocam : Icons.graphic_eq,
-                              color: AppTheme.primaryContainer,
-                              size: 14,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              _isLive
-                                  ? (_hasVideo ? 'Live Video Stream' : 'Live Audio Stream')
-                                  : 'Offline',
-                              style: const TextStyle(fontSize: 11, color: AppTheme.onSurface),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (_isHost)
-                        Row(
-                          children: [
-                            GestureDetector(
-                              onTap: _toggleMute,
-                              child: Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: _isMuted
-                                      ? Colors.redAccent.withValues(alpha: 0.8)
-                                      : Colors.black.withValues(alpha: 0.6),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: Icon(
-                                  _isMuted ? Icons.mic_off : Icons.mic,
-                                  color: Colors.white,
-                                  size: 18,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            GestureDetector(
-                              onTap: _endLive,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                decoration: BoxDecoration(
-                                  color: Colors.redAccent,
-                                  borderRadius: BorderRadius.circular(9999),
-                                ),
-                                child: const Row(
-                                  children: [
-                                    Icon(Icons.call_end, color: Colors.white, size: 14),
-                                    SizedBox(width: 4),
-                                    Text(
-                                      'End',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        )
-                      else if (!_isLive)
-                        GestureDetector(
-                          onTap: () => _startHostStream(withVideo: _hasVideo),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: AppTheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(9999),
-                            ),
-                            child: const Text(
-                              'Go Live',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.onPrimary,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          // Firestore-Backed Live Comments Stream
-          Expanded(
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _sessionService.watchComments(roomId),
-                    builder: (context, snapshot) {
-                      final comments = snapshot.data?.docs ?? [];
-
-                      return Expanded(
-                        child: Column(
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Row(
-                                  children: [
-                                    Icon(Icons.forum_outlined, size: 16, color: AppTheme.primaryContainer),
-                                    SizedBox(width: 6),
-                                    Text(
-                                      'Live Fellowship Chat',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.bold,
-                                        color: AppTheme.primaryContainer,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                Text(
-                                  '${comments.length} Comments',
-                                  style: const TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Expanded(
-                              child: comments.isEmpty
-                                  ? const Center(
-                                      child: Text(
-                                        'No comments yet. Share an encouragement!',
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          color: AppTheme.onSurfaceVariant,
-                                        ),
-                                      ),
-                                    )
-                                  : ListView.builder(
-                                      controller: _scrollController,
-                                      itemCount: comments.length,
-                                      itemBuilder: (context, index) {
-                                        final d = comments[index].data();
-                                        final authorName = d['authorName'] as String? ?? 'Believer';
-                                        final authorId = d['authorId'] as String? ?? '';
-                                        final text = d['text'] as String? ?? '';
-                                        final isMe = authorId == authProfile.id;
-
-                                        return Padding(
-                                          padding: const EdgeInsets.only(bottom: 8.0),
-                                          child: GlassCard(
-                                            level: GlassLevel.level1,
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 12,
-                                              vertical: 8,
-                                            ),
-                                            customSurfaceColor: isMe
-                                                ? AppTheme.primaryContainer.withValues(alpha: 0.15)
-                                                : AppTheme.surfaceLow.withValues(alpha: 0.6),
-                                            child: RichText(
-                                              text: TextSpan(
-                                                children: [
-                                                  TextSpan(
-                                                    text: '$authorName: ',
-                                                    style: const TextStyle(
-                                                      fontSize: 13,
-                                                      fontWeight: FontWeight.bold,
-                                                      color: AppTheme.primaryContainer,
-                                                    ),
-                                                  ),
-                                                  TextSpan(
-                                                    text: text,
-                                                    style: TextStyle(
-                                                      fontSize: 13,
-                                                      color: isMe
-                                                          ? AppTheme.primary
-                                                          : AppTheme.onSurface,
-                                                    ),
-                                                  ),
-                                                ],
-                                              ),
-                                            ),
-                                          ),
-                                        );
-                                      },
-                                    ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // Quick Reaction Chips
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: ['🙏 Amen!', '🔥 Hallelujah', '❤️ Praying', '📖 Glory'].map((reaction) {
-                        return Padding(
-                          padding: const EdgeInsets.only(right: 6.0),
-                          child: ActionChip(
-                            backgroundColor: AppTheme.surfaceHigh,
-                            label: Text(reaction, style: const TextStyle(fontSize: 12, color: AppTheme.onSurface)),
-                            onPressed: () {
-                              _chatController.text = reaction;
-                              _handleSendComment();
-                            },
-                          ),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-
-                  const SizedBox(height: 8),
-
-                  // Chat Input Bar
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: AppTheme.surfaceLowest,
-                            borderRadius: BorderRadius.circular(9999),
-                            border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
-                          ),
-                          child: TextField(
-                            controller: _chatController,
-                            style: const TextStyle(fontSize: 13, color: AppTheme.onSurface),
-                            onSubmitted: (_) => _handleSendComment(),
-                            decoration: const InputDecoration(
-                              hintText: 'Share a prayer or encouragement...',
-                              hintStyle: TextStyle(fontSize: 13, color: AppTheme.onSurfaceVariant),
-                              border: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: _handleSendComment,
-                        child: Container(
-                          padding: const EdgeInsets.all(10),
-                          decoration: const BoxDecoration(
-                            color: AppTheme.primaryContainer,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.send, color: AppTheme.onPrimary, size: 18),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
               ),
             ),
-          ),
-        ],
+
+            // Live Comments Area
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.forum_outlined, size: 15, color: AppTheme.primaryContainer),
+                            SizedBox(width: 6),
+                            Text(
+                              'Live Fellowship Chat',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.primaryContainer,
+                              ),
+                            ),
+                          ],
+                        ),
+                        StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                          stream: _sessionService.watchComments(roomId),
+                          builder: (context, snapshot) {
+                            final count = snapshot.data?.docs.length ?? 0;
+                            return Text(
+                              '$count Messages',
+                              style: const TextStyle(fontSize: 11, color: AppTheme.onSurfaceVariant),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+
+                    Expanded(
+                      child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                        stream: _sessionService.watchComments(roomId),
+                        builder: (context, snapshot) {
+                          final comments = snapshot.data?.docs ?? [];
+                          if (comments.isEmpty) {
+                            return const Center(
+                              child: Text(
+                                'No comments yet. Share a prayer or encouragement!',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppTheme.onSurfaceVariant,
+                                ),
+                              ),
+                            );
+                          }
+
+                          return ListView.builder(
+                            controller: _scrollController,
+                            physics: const BouncingScrollPhysics(),
+                            itemCount: comments.length,
+                            itemBuilder: (context, index) {
+                              final d = comments[index].data();
+                              final authorName = d['authorName'] as String? ?? 'Believer';
+                              final authorId = d['authorId'] as String? ?? '';
+                              final text = d['text'] as String? ?? '';
+                              final isMe = authorId == authProfile.id;
+
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 6.0),
+                                child: GlassCard(
+                                  level: GlassLevel.level1,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 8,
+                                  ),
+                                  customSurfaceColor: isMe
+                                      ? AppTheme.primaryContainer.withValues(alpha: 0.15)
+                                      : AppTheme.surfaceLow.withValues(alpha: 0.6),
+                                  child: RichText(
+                                    text: TextSpan(
+                                      children: [
+                                        TextSpan(
+                                          text: '$authorName: ',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.primaryContainer,
+                                          ),
+                                        ),
+                                        TextSpan(
+                                          text: text,
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: isMe ? AppTheme.primary : AppTheme.onSurface,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+
+                    const SizedBox(height: 6),
+
+                    // Quick Reaction Chips
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      child: Row(
+                        children: ['🙏 Amen!', '🔥 Hallelujah', '❤️ Praying', '📖 Glory'].map((reaction) {
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6.0),
+                            child: ActionChip(
+                              visualDensity: VisualDensity.compact,
+                              backgroundColor: AppTheme.surfaceHigh,
+                              label: Text(
+                                reaction,
+                                style: const TextStyle(fontSize: 11, color: AppTheme.onSurface),
+                              ),
+                              onPressed: () {
+                                _chatController.text = reaction;
+                                _handleSendComment();
+                              },
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+
+                    const SizedBox(height: 6),
+
+                    // Chat Input Bar
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: AppTheme.surfaceLowest,
+                              borderRadius: BorderRadius.circular(9999),
+                              border: Border.all(color: AppTheme.emeraldStrokeAlpha25),
+                            ),
+                            child: TextField(
+                              controller: _chatController,
+                              style: const TextStyle(fontSize: 13, color: AppTheme.onSurface),
+                              onSubmitted: (_) => _handleSendComment(),
+                              decoration: const InputDecoration(
+                                hintText: 'Share a prayer or encouragement...',
+                                hintStyle: TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant),
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        GestureDetector(
+                          onTap: _handleSendComment,
+                          child: Container(
+                            padding: const EdgeInsets.all(9),
+                            decoration: const BoxDecoration(
+                              color: AppTheme.primaryContainer,
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(Icons.send_rounded, color: AppTheme.onPrimary, size: 16),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
