@@ -12,7 +12,7 @@ import 'features/sermon/sermon_studio_screen.dart';
 import 'features/feed/sanctuary_community_feed_screen.dart';
 import 'features/fellowship/voice_prayer_call_screen.dart';
 import 'features/fellowship/video_fellowship_call_screen.dart';
-import 'features/live/live_fellowship_worship_room_screen.dart';
+import 'features/live/live_streams_list_screen.dart';
 import 'features/profile/profile_journey_hub_screen.dart';
 
 class AppShell extends ConsumerStatefulWidget {
@@ -31,7 +31,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   static const List<Widget> _screens = [
     BibleReaderScreen(),
     SermonStudioScreen(),
-    LiveFellowshipWorshipRoomScreen(),
+    LiveStreamsListScreen(),
     SanctuaryCommunityFeedScreen(),
     ProfileJourneyHubScreen(),
   ];
