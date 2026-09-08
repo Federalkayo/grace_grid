@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../../core/config/agora_config.dart';
 import '../../core/providers/mock_auth_provider.dart';
@@ -53,6 +54,8 @@ class _LiveFellowshipWorshipRoomScreenState
   bool _isHost = false;
   bool _connected = false;
   bool _isMuted = false;
+  bool _isViewerJoined = false;
+  bool _isJoining = false;
   int? _remoteHostUid;
   List<String> _likedUserIds = [];
 
@@ -86,6 +89,12 @@ class _LiveFellowshipWorshipRoomScreenState
   void _listenToRoomState() {
     final roomId = _currentRoomId;
     if (roomId == null) return;
+
+    // Avoid ever having two active listeners (e.g. one on the default room
+    // id set in initState, and one on the freshly-created room id from
+    // _startHostStream) which could otherwise race and trigger a duplicate
+    // joinChannel call on the same engine.
+    _roomSubscription?.cancel();
 
     _roomSubscription = _sessionService.watchRoom(roomId).listen((snapshot) async {
       if (!mounted) return;
@@ -164,7 +173,45 @@ class _LiveFellowshipWorshipRoomScreenState
     final roomId = _currentRoomId;
     if (roomId == null) return;
 
+    // Guard against re-entrancy: if a join is already in flight (e.g. the
+    // user double-tapped "Go Live", or two triggers fired close together),
+    // joining a second time on top of the first is exactly what produces
+    // AgoraRtcException(-17) — ERR_JOIN_CHANNEL_REJECTED.
+    if (_isJoining) {
+      debugPrint('_joinAsRole ignored: a join is already in progress.');
+      return;
+    }
+    _isJoining = true;
+
     try {
+      // Defensive cleanup: if a previous engine from an earlier session on
+      // this screen is still around (e.g. it hadn't finished releasing),
+      // fully leave/release it before starting a new one rather than
+      // stacking a second joinChannel on top of it.
+      if (_engine != null) {
+        await _leaveAndReleaseEngine();
+      }
+
+      // Request runtime permissions before touching the camera/mic — without
+      // this, Android silently hands back black video frames instead of
+      // throwing, which is what was causing the blank camera preview.
+      final permissions = <Permission>[Permission.microphone];
+      if (withVideo) permissions.add(Permission.camera);
+      final statuses = await permissions.request();
+      final micGranted = statuses[Permission.microphone] == PermissionStatus.granted;
+      final camGranted = !withVideo || statuses[Permission.camera] == PermissionStatus.granted;
+
+      if (!micGranted || !camGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Camera/microphone permission is needed to go live.'),
+            ),
+          );
+        }
+        return;
+      }
+
       final result = await FirebaseFunctions.instance
           .httpsCallable('generateAgoraRtcToken')
           .call({'channelName': roomId});
@@ -212,11 +259,39 @@ class _LiveFellowshipWorshipRoomScreenState
       );
 
       _engine = engine;
+
+      // Track audience presence so the host/viewers can see a live count of
+      // who's currently watching. The host isn't counted as a viewer.
+      if (role == ClientRoleType.clientRoleAudience) {
+        final authProfile = ref.read(mockAuthNotifierProvider).profile;
+        await _sessionService.joinAsViewer(
+          roomId: roomId,
+          userId: authProfile.id,
+          userName: authProfile.name,
+        );
+        _isViewerJoined = true;
+      }
     } catch (e) {
       debugPrint('Failed to join Agora channel: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Could not connect to stream channel: $e')),
+        );
+      }
+    } finally {
+      _isJoining = false;
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    if (_engine == null || !_isHost || !_hasVideo) return;
+    try {
+      await _engine?.switchCamera();
+    } catch (e) {
+      debugPrint('switchCamera failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not switch camera.')),
         );
       }
     }
@@ -255,6 +330,14 @@ class _LiveFellowshipWorshipRoomScreenState
       } catch (e) {
         debugPrint('Engine release error: $e');
       }
+    }
+    if (_isViewerJoined) {
+      final roomId = _currentRoomId;
+      final authProfile = ref.read(mockAuthNotifierProvider).profile;
+      if (roomId != null) {
+        await _sessionService.leaveAsViewer(roomId: roomId, userId: authProfile.id);
+      }
+      _isViewerJoined = false;
     }
     if (mounted) {
       setState(() {
@@ -325,6 +408,13 @@ class _LiveFellowshipWorshipRoomScreenState
       _sessionService.endLive(_currentRoomId!);
     }
 
+    if (_isViewerJoined && _currentRoomId != null) {
+      final authProfile = ref.read(mockAuthNotifierProvider).profile;
+      // Fire-and-forget: dispose() can't be awaited, but this still queues
+      // the delete before the widget/provider is fully torn down.
+      _sessionService.leaveAsViewer(roomId: _currentRoomId!, userId: authProfile.id);
+    }
+
     _engine?.leaveChannel();
     _engine?.release();
     super.dispose();
@@ -364,6 +454,42 @@ class _LiveFellowshipWorshipRoomScreenState
           ],
         ),
         actions: [
+          if (_isLive)
+            StreamBuilder<int>(
+              stream: _sessionService.watchViewerCount(roomId),
+              builder: (context, snapshot) {
+                final count = snapshot.data ?? 0;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 4.0),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceHighest,
+                      borderRadius: BorderRadius.circular(9999),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.remove_red_eye_outlined,
+                          size: 14,
+                          color: AppTheme.primaryContainer,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$count',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.onSurface,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
           Row(
             children: [
               IconButton(
@@ -532,6 +658,24 @@ class _LiveFellowshipWorshipRoomScreenState
                           Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              if (_hasVideo) ...[
+                                GestureDetector(
+                                  onTap: _switchCamera,
+                                  child: Container(
+                                    padding: const EdgeInsets.all(7),
+                                    decoration: BoxDecoration(
+                                      color: Colors.black.withValues(alpha: 0.65),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      Icons.cameraswitch,
+                                      color: Colors.white,
+                                      size: 16,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
                               GestureDetector(
                                 onTap: _toggleMute,
                                 child: Container(

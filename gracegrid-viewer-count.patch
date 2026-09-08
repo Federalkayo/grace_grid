@@ -1,0 +1,202 @@
+diff --git a/firestore.rules b/firestore.rules
+index 9453af8..ba173e1 100644
+--- a/firestore.rules
++++ b/firestore.rules
+@@ -69,6 +69,11 @@ service cloud.firestore {
+         allow read: if request.auth != null;
+         allow create: if request.auth != null && request.resource.data.authorId == request.auth.uid;
+       }
++
++      match /viewers/{viewerId} {
++        allow read: if request.auth != null;
++        allow write: if request.auth != null && request.auth.uid == viewerId;
++      }
+     }
+   }
+ }
+diff --git a/lib/core/services/live_session_service.dart b/lib/core/services/live_session_service.dart
+index 4862e27..c2fd121 100644
+--- a/lib/core/services/live_session_service.dart
++++ b/lib/core/services/live_session_service.dart
+@@ -104,4 +104,41 @@ class LiveSessionService {
+         .orderBy('createdAt', descending: false)
+         .snapshots();
+   }
++
++  /// Marks a user as an active viewer of a live room. Safe to call multiple
++  /// times (e.g. reconnects) since it just overwrites the presence doc.
++  Future<void> joinAsViewer({
++    required String roomId,
++    required String userId,
++    required String userName,
++  }) async {
++    final ref = _ref;
++    if (ref == null) return;
++    await ref.doc(roomId).collection('viewers').doc(userId).set({
++      'userName': userName,
++      'joinedAt': FieldValue.serverTimestamp(),
++    });
++  }
++
++  /// Removes a user's viewer-presence doc when they leave the room.
++  Future<void> leaveAsViewer({required String roomId, required String userId}) async {
++    final ref = _ref;
++    if (ref == null) return;
++    try {
++      await ref.doc(roomId).collection('viewers').doc(userId).delete();
++    } catch (e) {
++      debugPrint('leaveAsViewer failed: $e');
++    }
++  }
++
++  /// Live count of viewers currently present in a room.
++  Stream<int> watchViewerCount(String roomId) {
++    final ref = _ref;
++    if (ref == null) return const Stream.empty();
++    return ref
++        .doc(roomId)
++        .collection('viewers')
++        .snapshots()
++        .map((snap) => snap.docs.length);
++  }
+ }
+diff --git a/lib/features/live/live_fellowship_worship_room_screen.dart b/lib/features/live/live_fellowship_worship_room_screen.dart
+index 94d444f..8dd4011 100644
+--- a/lib/features/live/live_fellowship_worship_room_screen.dart
++++ b/lib/features/live/live_fellowship_worship_room_screen.dart
+@@ -54,6 +54,7 @@ class _LiveFellowshipWorshipRoomScreenState
+   bool _isHost = false;
+   bool _connected = false;
+   bool _isMuted = false;
++  bool _isViewerJoined = false;
+   int? _remoteHostUid;
+   List<String> _likedUserIds = [];
+ 
+@@ -239,6 +240,18 @@ class _LiveFellowshipWorshipRoomScreenState
+       );
+ 
+       _engine = engine;
++
++      // Track audience presence so the host/viewers can see a live count of
++      // who's currently watching. The host isn't counted as a viewer.
++      if (role == ClientRoleType.clientRoleAudience) {
++        final authProfile = ref.read(mockAuthNotifierProvider).profile;
++        await _sessionService.joinAsViewer(
++          roomId: roomId,
++          userId: authProfile.id,
++          userName: authProfile.name,
++        );
++        _isViewerJoined = true;
++      }
+     } catch (e) {
+       debugPrint('Failed to join Agora channel: $e');
+       if (mounted) {
+@@ -297,6 +310,14 @@ class _LiveFellowshipWorshipRoomScreenState
+         debugPrint('Engine release error: $e');
+       }
+     }
++    if (_isViewerJoined) {
++      final roomId = _currentRoomId;
++      final authProfile = ref.read(mockAuthNotifierProvider).profile;
++      if (roomId != null) {
++        await _sessionService.leaveAsViewer(roomId: roomId, userId: authProfile.id);
++      }
++      _isViewerJoined = false;
++    }
+     if (mounted) {
+       setState(() {
+         _connected = false;
+@@ -366,6 +387,13 @@ class _LiveFellowshipWorshipRoomScreenState
+       _sessionService.endLive(_currentRoomId!);
+     }
+ 
++    if (_isViewerJoined && _currentRoomId != null) {
++      final authProfile = ref.read(mockAuthNotifierProvider).profile;
++      // Fire-and-forget: dispose() can't be awaited, but this still queues
++      // the delete before the widget/provider is fully torn down.
++      _sessionService.leaveAsViewer(roomId: _currentRoomId!, userId: authProfile.id);
++    }
++
+     _engine?.leaveChannel();
+     _engine?.release();
+     super.dispose();
+@@ -405,6 +433,42 @@ class _LiveFellowshipWorshipRoomScreenState
+           ],
+         ),
+         actions: [
++          if (_isLive)
++            StreamBuilder<int>(
++              stream: _sessionService.watchViewerCount(roomId),
++              builder: (context, snapshot) {
++                final count = snapshot.data ?? 0;
++                return Padding(
++                  padding: const EdgeInsets.only(right: 4.0),
++                  child: Container(
++                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
++                    decoration: BoxDecoration(
++                      color: AppTheme.surfaceHighest,
++                      borderRadius: BorderRadius.circular(9999),
++                    ),
++                    child: Row(
++                      mainAxisSize: MainAxisSize.min,
++                      children: [
++                        const Icon(
++                          Icons.remove_red_eye_outlined,
++                          size: 14,
++                          color: AppTheme.primaryContainer,
++                        ),
++                        const SizedBox(width: 4),
++                        Text(
++                          '$count',
++                          style: const TextStyle(
++                            fontSize: 12,
++                            fontWeight: FontWeight.bold,
++                            color: AppTheme.onSurface,
++                          ),
++                        ),
++                      ],
++                    ),
++                  ),
++                );
++              },
++            ),
+           Row(
+             children: [
+               IconButton(
+diff --git a/lib/features/live/live_streams_list_screen.dart b/lib/features/live/live_streams_list_screen.dart
+index 1c4a068..5de60a4 100644
+--- a/lib/features/live/live_streams_list_screen.dart
++++ b/lib/features/live/live_streams_list_screen.dart
+@@ -596,6 +596,32 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
+                                               color: AppTheme.onSurfaceVariant,
+                                             ),
+                                           ),
++                                          const SizedBox(width: 12),
++                                          StreamBuilder<int>(
++                                            stream: _sessionService.watchViewerCount(roomId),
++                                            builder: (context, viewerSnap) {
++                                              final viewerCount = viewerSnap.data ?? 0;
++                                              return Row(
++                                                mainAxisSize: MainAxisSize.min,
++                                                children: [
++                                                  const Icon(
++                                                    Icons.remove_red_eye_outlined,
++                                                    size: 13,
++                                                    color: AppTheme.primaryContainer,
++                                                  ),
++                                                  const SizedBox(width: 4),
++                                                  Text(
++                                                    '$viewerCount',
++                                                    style: const TextStyle(
++                                                      fontSize: 12,
++                                                      fontWeight: FontWeight.bold,
++                                                      color: AppTheme.onSurfaceVariant,
++                                                    ),
++                                                  ),
++                                                ],
++                                              );
++                                            },
++                                          ),
+                                         ],
+                                       ),
+                                     ],

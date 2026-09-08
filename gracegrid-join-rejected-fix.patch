@@ -1,0 +1,71 @@
+diff --git a/lib/features/live/live_fellowship_worship_room_screen.dart b/lib/features/live/live_fellowship_worship_room_screen.dart
+index 8dd4011..3b8a7ae 100644
+--- a/lib/features/live/live_fellowship_worship_room_screen.dart
++++ b/lib/features/live/live_fellowship_worship_room_screen.dart
+@@ -55,6 +55,7 @@ class _LiveFellowshipWorshipRoomScreenState
+   bool _connected = false;
+   bool _isMuted = false;
+   bool _isViewerJoined = false;
++  bool _isJoining = false;
+   int? _remoteHostUid;
+   List<String> _likedUserIds = [];
+ 
+@@ -172,7 +173,25 @@ class _LiveFellowshipWorshipRoomScreenState
+     final roomId = _currentRoomId;
+     if (roomId == null) return;
+ 
++    // Guard against re-entrancy: if a join is already in flight (e.g. the
++    // user double-tapped "Go Live", or two triggers fired close together),
++    // joining a second time on top of the first is exactly what produces
++    // AgoraRtcException(-17) — ERR_JOIN_CHANNEL_REJECTED.
++    if (_isJoining) {
++      debugPrint('_joinAsRole ignored: a join is already in progress.');
++      return;
++    }
++    _isJoining = true;
++
+     try {
++      // Defensive cleanup: if a previous engine from an earlier session on
++      // this screen is still around (e.g. it hadn't finished releasing),
++      // fully leave/release it before starting a new one rather than
++      // stacking a second joinChannel on top of it.
++      if (_engine != null) {
++        await _leaveAndReleaseEngine();
++      }
++
+       // Request runtime permissions before touching the camera/mic — without
+       // this, Android silently hands back black video frames instead of
+       // throwing, which is what was causing the blank camera preview.
+@@ -259,6 +278,8 @@ class _LiveFellowshipWorshipRoomScreenState
+           SnackBar(content: Text('Could not connect to stream channel: $e')),
+         );
+       }
++    } finally {
++      _isJoining = false;
+     }
+   }
+ 
+diff --git a/lib/features/live/live_streams_list_screen.dart b/lib/features/live/live_streams_list_screen.dart
+index 5de60a4..3b548b2 100644
+--- a/lib/features/live/live_streams_list_screen.dart
++++ b/lib/features/live/live_streams_list_screen.dart
+@@ -20,8 +20,19 @@ class LiveStreamsListScreen extends ConsumerStatefulWidget {
+ 
+ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
+   final LiveSessionService _sessionService = LiveSessionService();
++  bool _isStartingStream = false;
+ 
+   Future<void> _handleGoLivePrompt() async {
++    if (_isStartingStream) return;
++    _isStartingStream = true;
++    try {
++      await _handleGoLivePromptInner();
++    } finally {
++      _isStartingStream = false;
++    }
++  }
++
++  Future<void> _handleGoLivePromptInner() async {
+     final authState = ref.read(mockAuthNotifierProvider);
+     if (authState.isGuest) {
+       LoginSignupModal.show(context, gatedActionTitle: 'start a Live Worship Stream');

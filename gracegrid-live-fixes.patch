@@ -1,0 +1,148 @@
+diff --git a/firebase.json b/firebase.json
+index 08f75c1..05e1281 100644
+--- a/firebase.json
++++ b/firebase.json
+@@ -1,6 +1,7 @@
+ {
+   "firestore": {
+-    "rules": "firestore.rules"
++    "rules": "firestore.rules",
++    "indexes": "firestore.indexes.json"
+   },
+   "storage": {
+     "rules": "storage.rules"
+diff --git a/firestore.indexes.json b/firestore.indexes.json
+new file mode 100644
+index 0000000..81c52d6
+--- /dev/null
++++ b/firestore.indexes.json
+@@ -0,0 +1,13 @@
++{
++  "indexes": [
++    {
++      "collectionGroup": "liveSessions",
++      "queryScope": "COLLECTION",
++      "fields": [
++        { "fieldPath": "isLive", "order": "ASCENDING" },
++        { "fieldPath": "startedAt", "order": "DESCENDING" }
++      ]
++    }
++  ],
++  "fieldOverrides": []
++}
+diff --git a/lib/features/live/live_fellowship_worship_room_screen.dart b/lib/features/live/live_fellowship_worship_room_screen.dart
+index 23b1504..94d444f 100644
+--- a/lib/features/live/live_fellowship_worship_room_screen.dart
++++ b/lib/features/live/live_fellowship_worship_room_screen.dart
+@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
+ import 'package:cloud_functions/cloud_functions.dart';
+ import 'package:flutter/material.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:permission_handler/permission_handler.dart';
+ 
+ import '../../core/config/agora_config.dart';
+ import '../../core/providers/mock_auth_provider.dart';
+@@ -87,6 +88,12 @@ class _LiveFellowshipWorshipRoomScreenState
+     final roomId = _currentRoomId;
+     if (roomId == null) return;
+ 
++    // Avoid ever having two active listeners (e.g. one on the default room
++    // id set in initState, and one on the freshly-created room id from
++    // _startHostStream) which could otherwise race and trigger a duplicate
++    // joinChannel call on the same engine.
++    _roomSubscription?.cancel();
++
+     _roomSubscription = _sessionService.watchRoom(roomId).listen((snapshot) async {
+       if (!mounted) return;
+       if (!snapshot.exists) {
+@@ -165,6 +172,26 @@ class _LiveFellowshipWorshipRoomScreenState
+     if (roomId == null) return;
+ 
+     try {
++      // Request runtime permissions before touching the camera/mic — without
++      // this, Android silently hands back black video frames instead of
++      // throwing, which is what was causing the blank camera preview.
++      final permissions = <Permission>[Permission.microphone];
++      if (withVideo) permissions.add(Permission.camera);
++      final statuses = await permissions.request();
++      final micGranted = statuses[Permission.microphone] == PermissionStatus.granted;
++      final camGranted = !withVideo || statuses[Permission.camera] == PermissionStatus.granted;
++
++      if (!micGranted || !camGranted) {
++        if (mounted) {
++          ScaffoldMessenger.of(context).showSnackBar(
++            const SnackBar(
++              content: Text('Camera/microphone permission is needed to go live.'),
++            ),
++          );
++        }
++        return;
++      }
++
+       final result = await FirebaseFunctions.instance
+           .httpsCallable('generateAgoraRtcToken')
+           .call({'channelName': roomId});
+@@ -222,6 +249,20 @@ class _LiveFellowshipWorshipRoomScreenState
+     }
+   }
+ 
++  Future<void> _switchCamera() async {
++    if (_engine == null || !_isHost || !_hasVideo) return;
++    try {
++      await _engine?.switchCamera();
++    } catch (e) {
++      debugPrint('switchCamera failed: $e');
++      if (mounted) {
++        ScaffoldMessenger.of(context).showSnackBar(
++          const SnackBar(content: Text('Could not switch camera.')),
++        );
++      }
++    }
++  }
++
+   Future<void> _toggleMute() async {
+     if (_engine == null || !_isHost) return;
+     final newValue = !_isMuted;
+@@ -532,6 +573,24 @@ class _LiveFellowshipWorshipRoomScreenState
+                           Row(
+                             mainAxisSize: MainAxisSize.min,
+                             children: [
++                              if (_hasVideo) ...[
++                                GestureDetector(
++                                  onTap: _switchCamera,
++                                  child: Container(
++                                    padding: const EdgeInsets.all(7),
++                                    decoration: BoxDecoration(
++                                      color: Colors.black.withValues(alpha: 0.65),
++                                      shape: BoxShape.circle,
++                                    ),
++                                    child: const Icon(
++                                      Icons.cameraswitch,
++                                      color: Colors.white,
++                                      size: 16,
++                                    ),
++                                  ),
++                                ),
++                                const SizedBox(width: 8),
++                              ],
+                               GestureDetector(
+                                 onTap: _toggleMute,
+                                 child: Container(
+diff --git a/lib/features/live/live_streams_list_screen.dart b/lib/features/live/live_streams_list_screen.dart
+index d51dfae..1c4a068 100644
+--- a/lib/features/live/live_streams_list_screen.dart
++++ b/lib/features/live/live_streams_list_screen.dart
+@@ -396,6 +396,13 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
+                 );
+               }
+ 
++              if (snapshot.hasError) {
++                // Surface this in logs so a missing Firestore index (or a
++                // rules issue) shows up immediately instead of silently
++                // rendering as "no active streams".
++                debugPrint('watchActiveRooms() stream error: ${snapshot.error}');
++              }
++
+               final docs = snapshot.data?.docs ?? [];
+               if (docs.isEmpty) {
+                 return SliverFillRemaining(

@@ -20,8 +20,19 @@ class LiveStreamsListScreen extends ConsumerStatefulWidget {
 
 class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
   final LiveSessionService _sessionService = LiveSessionService();
+  bool _isStartingStream = false;
 
   Future<void> _handleGoLivePrompt() async {
+    if (_isStartingStream) return;
+    _isStartingStream = true;
+    try {
+      await _handleGoLivePromptInner();
+    } finally {
+      _isStartingStream = false;
+    }
+  }
+
+  Future<void> _handleGoLivePromptInner() async {
     final authState = ref.read(mockAuthNotifierProvider);
     if (authState.isGuest) {
       LoginSignupModal.show(context, gatedActionTitle: 'start a Live Worship Stream');
@@ -396,6 +407,13 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                 );
               }
 
+              if (snapshot.hasError) {
+                // Surface this in logs so a missing Firestore index (or a
+                // rules issue) shows up immediately instead of silently
+                // rendering as "no active streams".
+                debugPrint('watchActiveRooms() stream error: ${snapshot.error}');
+              }
+
               final docs = snapshot.data?.docs ?? [];
               if (docs.isEmpty) {
                 return SliverFillRemaining(
@@ -588,6 +606,32 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
                                               fontWeight: FontWeight.bold,
                                               color: AppTheme.onSurfaceVariant,
                                             ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          StreamBuilder<int>(
+                                            stream: _sessionService.watchViewerCount(roomId),
+                                            builder: (context, viewerSnap) {
+                                              final viewerCount = viewerSnap.data ?? 0;
+                                              return Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(
+                                                    Icons.remove_red_eye_outlined,
+                                                    size: 13,
+                                                    color: AppTheme.primaryContainer,
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  Text(
+                                                    '$viewerCount',
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: AppTheme.onSurfaceVariant,
+                                                    ),
+                                                  ),
+                                                ],
+                                              );
+                                            },
                                           ),
                                         ],
                                       ),

@@ -104,4 +104,41 @@ class LiveSessionService {
         .orderBy('createdAt', descending: false)
         .snapshots();
   }
+
+  /// Marks a user as an active viewer of a live room. Safe to call multiple
+  /// times (e.g. reconnects) since it just overwrites the presence doc.
+  Future<void> joinAsViewer({
+    required String roomId,
+    required String userId,
+    required String userName,
+  }) async {
+    final ref = _ref;
+    if (ref == null) return;
+    await ref.doc(roomId).collection('viewers').doc(userId).set({
+      'userName': userName,
+      'joinedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Removes a user's viewer-presence doc when they leave the room.
+  Future<void> leaveAsViewer({required String roomId, required String userId}) async {
+    final ref = _ref;
+    if (ref == null) return;
+    try {
+      await ref.doc(roomId).collection('viewers').doc(userId).delete();
+    } catch (e) {
+      debugPrint('leaveAsViewer failed: $e');
+    }
+  }
+
+  /// Live count of viewers currently present in a room.
+  Stream<int> watchViewerCount(String roomId) {
+    final ref = _ref;
+    if (ref == null) return const Stream.empty();
+    return ref
+        .doc(roomId)
+        .collection('viewers')
+        .snapshots()
+        .map((snap) => snap.docs.length);
+  }
 }
