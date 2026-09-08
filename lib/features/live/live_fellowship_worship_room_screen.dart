@@ -3,8 +3,10 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/config/agora_config.dart';
 import '../../core/providers/mock_auth_provider.dart';
@@ -56,6 +58,9 @@ class _LiveFellowshipWorshipRoomScreenState
   bool _isMuted = false;
   bool _isViewerJoined = false;
   bool _isJoining = false;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _commentsSubscription;
+  final StreamController<_FloatingBubble> _bubbleEvents = StreamController<_FloatingBubble>.broadcast();
+  int _bubbleIdCounter = 0;
   int? _remoteHostUid;
   List<String> _likedUserIds = [];
 
@@ -80,6 +85,11 @@ class _LiveFellowshipWorshipRoomScreenState
     _isHost = widget.isHostStarting || (_hostId != null && _hostId == authProfile.id);
 
     _listenToRoomState();
+    _listenToComments();
+
+    // Keep the screen awake for the whole time someone is on a live/room
+    // screen, so it doesn't lock mid-stream.
+    WakelockPlus.enable();
 
     if (widget.isHostStarting) {
       _startHostStream(withVideo: widget.hasVideo);
@@ -114,6 +124,7 @@ class _LiveFellowshipWorshipRoomScreenState
       final String? hostName = data['hostName'] as String?;
       final bool hasVideo = data['hasVideo'] as bool? ?? false;
       final List<dynamic> likes = data['likedUserIds'] as List<dynamic>? ?? [];
+      final int previousLikeCount = _likedUserIds.length;
 
       final authProfile = ref.read(mockAuthNotifierProvider).profile;
       final bool isMeHost = hostId != null && hostId == authProfile.id;
@@ -127,6 +138,12 @@ class _LiveFellowshipWorshipRoomScreenState
         _isHost = isMeHost || widget.isHostStarting;
       });
 
+      // Someone (possibly on another device) just liked the stream — show a
+      // floating heart, the same way the chat bubbles float up.
+      if (likes.length > previousLikeCount) {
+        _spawnHeartBubble();
+      }
+
       // Audience auto-join logic
       if (isLive && !_isHost && _engine == null && !_connected) {
         await _joinAsRole(ClientRoleType.clientRoleAudience, withVideo: hasVideo);
@@ -139,6 +156,65 @@ class _LiveFellowshipWorshipRoomScreenState
         }
       }
     });
+  }
+
+  /// Listens for newly-arrived chat messages (skipping the initial backlog
+  /// batch) and turns each one into a floating bubble over the video.
+  void _listenToComments() {
+    final roomId = _currentRoomId;
+    if (roomId == null) return;
+
+    _commentsSubscription?.cancel();
+    bool isFirstSnapshot = true;
+
+    _commentsSubscription = _sessionService.watchComments(roomId).listen((snapshot) {
+      if (!mounted) return;
+      // The first snapshot contains existing chat history — skip it so we
+      // don't flood the overlay with old messages when someone joins mid
+      // stream. Only genuinely new arrivals after this point float up.
+      if (isFirstSnapshot) {
+        isFirstSnapshot = false;
+        return;
+      }
+      for (final change in snapshot.docChanges) {
+        if (change.type != DocumentChangeType.added) continue;
+        final data = change.doc.data();
+        if (data == null) continue;
+        final authorName = data['authorName'] as String? ?? 'Believer';
+        final text = data['text'] as String? ?? '';
+        if (text.isEmpty) continue;
+        _spawnMessageBubble(authorName, text);
+      }
+    });
+  }
+
+  void _spawnMessageBubble(String authorName, String text) {
+    if (!mounted) return;
+    _bubbleEvents.add(
+      _FloatingBubble(id: _bubbleIdCounter++, isHeart: false, authorName: authorName, text: text),
+    );
+  }
+
+  void _spawnHeartBubble() {
+    if (!mounted) return;
+    _bubbleEvents.add(_FloatingBubble(id: _bubbleIdCounter++, isHeart: true));
+  }
+
+  void _openFullscreen() {
+    if (_engine == null) return;
+    final roomId = _currentRoomId ?? AgoraConfig.liveWorshipRoomId;
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => _FullscreenLiveVideo(
+          engine: _engine!,
+          isHost: _isHost,
+          remoteHostUid: _remoteHostUid,
+          roomId: roomId,
+          bubbleEvents: _bubbleEvents.stream,
+        ),
+        fullscreenDialog: true,
+      ),
+    );
   }
 
   Future<void> _startHostStream({required bool withVideo}) async {
@@ -164,6 +240,7 @@ class _LiveFellowshipWorshipRoomScreenState
         hasVideo: withVideo,
       );
       _listenToRoomState();
+      _listenToComments();
     }
 
     await _joinAsRole(ClientRoleType.clientRoleBroadcaster, withVideo: withVideo);
@@ -401,8 +478,11 @@ class _LiveFellowshipWorshipRoomScreenState
   void dispose() {
     _pulseController.dispose();
     _roomSubscription?.cancel();
+    _commentsSubscription?.cancel();
+    _bubbleEvents.close();
     _chatController.dispose();
     _scrollController.dispose();
+    WakelockPlus.disable();
 
     if (_isHost && _isLive && _currentRoomId != null) {
       _sessionService.endLive(_currentRoomId!);
@@ -743,6 +823,28 @@ class _LiveFellowshipWorshipRoomScreenState
                       ],
                     ),
                   ),
+
+                  // Fullscreen toggle, bottom-right of the video viewport.
+                  if (_hasVideo && _engine != null)
+                    Positioned(
+                      bottom: 8,
+                      right: 10,
+                      child: GestureDetector(
+                        onTap: _openFullscreen,
+                        child: Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.65),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            Icons.fullscreen,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -925,6 +1027,241 @@ class _LiveFellowshipWorshipRoomScreenState
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Lightweight data for a single floating chat/like bubble.
+class _FloatingBubble {
+  final int id;
+  final bool isHeart;
+  final String? authorName;
+  final String? text;
+
+  const _FloatingBubble({
+    required this.id,
+    required this.isHeart,
+    this.authorName,
+    this.text,
+  });
+}
+
+/// Renders one floating bubble that rises and fades out on its own, then
+/// removes itself from the parent's list via [onDone].
+class _FloatingBubbleView extends StatefulWidget {
+  final _FloatingBubble data;
+  final double horizontalOffset;
+  final VoidCallback onDone;
+
+  const _FloatingBubbleView({
+    super.key,
+    required this.data,
+    required this.horizontalOffset,
+    required this.onDone,
+  });
+
+  @override
+  State<_FloatingBubbleView> createState() => _FloatingBubbleViewState();
+}
+
+class _FloatingBubbleViewState extends State<_FloatingBubbleView>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _riseAnimation;
+  late final Animation<double> _fadeAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3200),
+    );
+    _riseAnimation = Tween<double>(begin: 0, end: 140).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    );
+    _fadeAnimation = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: 1.0), weight: 10),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.0), weight: 55),
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 0.0), weight: 35),
+    ]).animate(_controller);
+    _controller.forward().whenComplete(() {
+      if (mounted) widget.onDone();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Positioned(
+          bottom: 12 + _riseAnimation.value,
+          right: 12 + widget.horizontalOffset,
+          child: Opacity(
+            opacity: _fadeAnimation.value,
+            child: child,
+          ),
+        );
+      },
+      child: widget.data.isHeart
+          ? const Icon(Icons.favorite, color: Colors.redAccent, size: 26)
+          : Container(
+              constraints: const BoxConstraints(maxWidth: 220),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: RichText(
+                text: TextSpan(
+                  children: [
+                    TextSpan(
+                      text: '${widget.data.authorName}: ',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primaryContainer,
+                      ),
+                    ),
+                    TextSpan(
+                      text: widget.data.text ?? '',
+                      style: const TextStyle(fontSize: 12, color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+}
+
+/// A dedicated, YouTube-style fullscreen route for the video feed. Reuses
+/// the same live [engine] the parent screen already joined with, so video
+/// keeps streaming seamlessly across the transition — only the layout,
+/// orientation, and system UI mode change. Floating chat/like bubbles are
+/// only shown here, in fullscreen.
+class _FullscreenLiveVideo extends StatefulWidget {
+  final RtcEngine engine;
+  final bool isHost;
+  final int? remoteHostUid;
+  final String roomId;
+  final Stream<_FloatingBubble> bubbleEvents;
+
+  const _FullscreenLiveVideo({
+    required this.engine,
+    required this.isHost,
+    required this.remoteHostUid,
+    required this.roomId,
+    required this.bubbleEvents,
+  });
+
+  @override
+  State<_FullscreenLiveVideo> createState() => _FullscreenLiveVideoState();
+}
+
+class _FullscreenLiveVideoState extends State<_FullscreenLiveVideo> {
+  StreamSubscription<_FloatingBubble>? _bubbleSubscription;
+  final List<_FloatingBubble> _bubbles = [];
+
+  @override
+  void initState() {
+    super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+
+    _bubbleSubscription = widget.bubbleEvents.listen((bubble) {
+      if (!mounted) return;
+      setState(() {
+        _bubbles.add(bubble);
+        // Cap how many are alive at once so the overlay never grows
+        // unbounded during a busy chat burst.
+        while (_bubbles.length > 8) {
+          _bubbles.removeAt(0);
+        }
+      });
+    });
+  }
+
+  void _removeBubble(int id) {
+    if (!mounted) return;
+    setState(() {
+      _bubbles.removeWhere((b) => b.id == id);
+    });
+  }
+
+  @override
+  void dispose() {
+    _bubbleSubscription?.cancel();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: widget.isHost
+                ? AgoraVideoView(
+                    controller: VideoViewController(
+                      rtcEngine: widget.engine,
+                      canvas: const VideoCanvas(uid: 0),
+                    ),
+                  )
+                : (widget.remoteHostUid != null
+                    ? AgoraVideoView(
+                        controller: VideoViewController.remote(
+                          rtcEngine: widget.engine,
+                          canvas: VideoCanvas(uid: widget.remoteHostUid),
+                          connection: RtcConnection(channelId: widget.roomId),
+                        ),
+                      )
+                    : const Center(
+                        child: CircularProgressIndicator(color: AppTheme.primaryContainer),
+                      )),
+          ),
+          Positioned(
+            top: 16,
+            left: 16,
+            child: SafeArea(
+              child: GestureDetector(
+                onTap: () => Navigator.of(context).pop(),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.55),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.close, color: Colors.white, size: 22),
+                ),
+              ),
+            ),
+          ),
+
+          // Floating chat/like bubbles — fullscreen only.
+          ..._bubbles.map(
+            (b) => _FloatingBubbleView(
+              key: ValueKey(b.id),
+              data: b,
+              horizontalOffset: (b.id % 4) * 14.0,
+              onDone: () => _removeBubble(b.id),
+            ),
+          ),
+        ],
       ),
     );
   }
