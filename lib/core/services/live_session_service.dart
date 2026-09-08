@@ -141,4 +141,18 @@ class LiveSessionService {
         .snapshots()
         .map((snap) => snap.docs.length);
   }
+
+  /// Registers rapid tap-to-heart taps (TikTok-Live style). Batched
+  /// client-side and sent as a single increment so a burst of taps doesn't
+  /// turn into a burst of writes.
+  Future<void> sendHeartTaps(String roomId, {int count = 1}) async {
+    if (count <= 0) return;
+    final ref = _ref;
+    if (ref == null) return;
+    try {
+      await ref.doc(roomId).update({'heartTapCount': FieldValue.increment(count)});
+    } catch (e) {
+      debugPrint('sendHeartTaps failed: $e');
+    }
+  }
 }

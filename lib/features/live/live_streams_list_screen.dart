@@ -22,6 +22,16 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
   final LiveSessionService _sessionService = LiveSessionService();
   bool _isStartingStream = false;
 
+  /// Pull-to-refresh handler. watchActiveRooms() is called fresh on every
+  /// build (it's not cached in a field), so simply rebuilding is enough to
+  /// force StreamBuilder to drop the old subscription and resubscribe —
+  /// handy if the live list ever looks stuck or a transient Firestore error
+  /// left it stale.
+  Future<void> _handleRefresh() async {
+    if (mounted) setState(() {});
+    await Future.delayed(const Duration(milliseconds: 400));
+  }
+
   Future<void> _handleGoLivePrompt() async {
     if (_isStartingStream) return;
     _isStartingStream = true;
@@ -256,9 +266,13 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
           ],
         ),
       ),
-      body: CustomScrollView(
-        physics: const BouncingScrollPhysics(),
-        slivers: [
+      body: RefreshIndicator(
+        color: AppTheme.primaryContainer,
+        backgroundColor: AppTheme.surfaceLow,
+        onRefresh: _handleRefresh,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+          slivers: [
           // Hero Banner Container
           SliverToBoxAdapter(
             child: Padding(
@@ -667,6 +681,7 @@ class _LiveStreamsListScreenState extends ConsumerState<LiveStreamsListScreen> {
             },
           ),
         ],
+      ),
       ),
     );
   }

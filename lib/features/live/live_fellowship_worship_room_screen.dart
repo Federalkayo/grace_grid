@@ -61,6 +61,8 @@ class _LiveFellowshipWorshipRoomScreenState
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _commentsSubscription;
   final StreamController<_FloatingBubble> _bubbleEvents = StreamController<_FloatingBubble>.broadcast();
   int _bubbleIdCounter = 0;
+  int _lastHeartTapCount = 0;
+  int _pendingSelfTapAcknowledged = 0;
   int? _remoteHostUid;
   List<String> _likedUserIds = [];
 
@@ -125,6 +127,9 @@ class _LiveFellowshipWorshipRoomScreenState
       final bool hasVideo = data['hasVideo'] as bool? ?? false;
       final List<dynamic> likes = data['likedUserIds'] as List<dynamic>? ?? [];
       final int previousLikeCount = _likedUserIds.length;
+      final int heartTapCount = data['heartTapCount'] as int? ?? 0;
+      final int previousHeartTapCount = _lastHeartTapCount;
+      _lastHeartTapCount = heartTapCount;
 
       final authProfile = ref.read(mockAuthNotifierProvider).profile;
       final bool isMeHost = hostId != null && hostId == authProfile.id;
@@ -142,6 +147,25 @@ class _LiveFellowshipWorshipRoomScreenState
       // floating heart, the same way the chat bubbles float up.
       if (likes.length > previousLikeCount) {
         _spawnHeartBubble();
+      }
+
+      // TikTok-style tap-to-heart: someone tapped the video repeatedly.
+      // Taps this exact device already showed locally (instant, optimistic)
+      // are excluded so the tapper doesn't see their own hearts twice.
+      final int tapDelta = heartTapCount - previousHeartTapCount;
+      if (tapDelta > 0) {
+        final int selfAcknowledged =
+            _pendingSelfTapAcknowledged < tapDelta ? _pendingSelfTapAcknowledged : tapDelta;
+        _pendingSelfTapAcknowledged -= selfAcknowledged;
+        final int broadcastDelta = tapDelta - selfAcknowledged;
+        if (broadcastDelta > 0) {
+          final int burst = broadcastDelta > 5 ? 5 : broadcastDelta;
+          for (int i = 0; i < burst; i++) {
+            Future.delayed(Duration(milliseconds: i * 90), () {
+              if (mounted) _spawnHeartBubble();
+            });
+          }
+        }
       }
 
       // Audience auto-join logic
@@ -211,10 +235,23 @@ class _LiveFellowshipWorshipRoomScreenState
           remoteHostUid: _remoteHostUid,
           roomId: roomId,
           bubbleEvents: _bubbleEvents.stream,
+          onHeartTaps: _registerHeartTaps,
         ),
         fullscreenDialog: true,
       ),
     );
+  }
+
+  /// Called when the fullscreen view flushes a batch of tap-to-heart taps.
+  /// Marks them as "already shown locally" so the room-state listener
+  /// doesn't show this same device its own taps a second time when the
+  /// Firestore write reflects back.
+  void _registerHeartTaps(int count) {
+    if (count <= 0) return;
+    final roomId = _currentRoomId;
+    if (roomId == null) return;
+    _pendingSelfTapAcknowledged += count;
+    _sessionService.sendHeartTaps(roomId, count: count);
   }
 
   Future<void> _startHostStream({required bool withVideo}) async {
@@ -1038,12 +1075,14 @@ class _FloatingBubble {
   final bool isHeart;
   final String? authorName;
   final String? text;
+  final Offset? origin;
 
   const _FloatingBubble({
     required this.id,
     required this.isHeart,
     this.authorName,
     this.text,
+    this.origin,
   });
 }
 
@@ -1099,9 +1138,22 @@ class _FloatingBubbleViewState extends State<_FloatingBubbleView>
 
   @override
   Widget build(BuildContext context) {
+    final Offset? origin = widget.data.origin;
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, child) {
+        if (origin != null) {
+          // Rises straight up from wherever the tap landed, like a
+          // TikTok-style tap-to-heart.
+          return Positioned(
+            left: origin.dx - 14,
+            top: origin.dy - _riseAnimation.value - 14,
+            child: Opacity(
+              opacity: _fadeAnimation.value,
+              child: child,
+            ),
+          );
+        }
         return Positioned(
           bottom: 12 + _riseAnimation.value,
           right: 12 + widget.horizontalOffset,
@@ -1154,6 +1206,7 @@ class _FullscreenLiveVideo extends StatefulWidget {
   final int? remoteHostUid;
   final String roomId;
   final Stream<_FloatingBubble> bubbleEvents;
+  final ValueChanged<int> onHeartTaps;
 
   const _FullscreenLiveVideo({
     required this.engine,
@@ -1161,6 +1214,7 @@ class _FullscreenLiveVideo extends StatefulWidget {
     required this.remoteHostUid,
     required this.roomId,
     required this.bubbleEvents,
+    required this.onHeartTaps,
   });
 
   @override
@@ -1170,6 +1224,10 @@ class _FullscreenLiveVideo extends StatefulWidget {
 class _FullscreenLiveVideoState extends State<_FullscreenLiveVideo> {
   StreamSubscription<_FloatingBubble>? _bubbleSubscription;
   final List<_FloatingBubble> _bubbles = [];
+  int _localBubbleId = -1; // negative range so it never collides with ids
+  // coming from the shared bubbleEvents stream.
+  int _pendingTapCount = 0;
+  Timer? _tapFlushTimer;
 
   @override
   void initState() {
@@ -1200,9 +1258,42 @@ class _FullscreenLiveVideoState extends State<_FullscreenLiveVideo> {
     });
   }
 
+  /// TikTok-Live style tap-to-heart: every tap instantly pops a heart right
+  /// where the finger landed. Taps are also batched and flushed to Firestore
+  /// every ~350ms so a rapid tapping burst becomes one write, not dozens.
+  void _handleVideoTap(TapDownDetails details) {
+    if (!mounted) return;
+    setState(() {
+      _bubbles.add(
+        _FloatingBubble(id: _localBubbleId--, isHeart: true, origin: details.localPosition),
+      );
+      while (_bubbles.length > 14) {
+        _bubbles.removeAt(0);
+      }
+    });
+
+    _pendingTapCount++;
+    _tapFlushTimer ??= Timer(const Duration(milliseconds: 350), _flushPendingTaps);
+  }
+
+  void _flushPendingTaps() {
+    _tapFlushTimer = null;
+    final count = _pendingTapCount;
+    _pendingTapCount = 0;
+    if (count > 0) {
+      widget.onHeartTaps(count);
+    }
+  }
+
   @override
   void dispose() {
     _bubbleSubscription?.cancel();
+    _tapFlushTimer?.cancel();
+    if (_pendingTapCount > 0) {
+      // Don't lose a burst of taps that happened right before exiting.
+      widget.onHeartTaps(_pendingTapCount);
+      _pendingTapCount = 0;
+    }
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     super.dispose();
@@ -1215,24 +1306,28 @@ class _FullscreenLiveVideoState extends State<_FullscreenLiveVideo> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: widget.isHost
-                ? AgoraVideoView(
-                    controller: VideoViewController(
-                      rtcEngine: widget.engine,
-                      canvas: const VideoCanvas(uid: 0),
-                    ),
-                  )
-                : (widget.remoteHostUid != null
-                    ? AgoraVideoView(
-                        controller: VideoViewController.remote(
-                          rtcEngine: widget.engine,
-                          canvas: VideoCanvas(uid: widget.remoteHostUid),
-                          connection: RtcConnection(channelId: widget.roomId),
-                        ),
-                      )
-                    : const Center(
-                        child: CircularProgressIndicator(color: AppTheme.primaryContainer),
-                      )),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapDown: _handleVideoTap,
+              child: widget.isHost
+                  ? AgoraVideoView(
+                      controller: VideoViewController(
+                        rtcEngine: widget.engine,
+                        canvas: const VideoCanvas(uid: 0),
+                      ),
+                    )
+                  : (widget.remoteHostUid != null
+                      ? AgoraVideoView(
+                          controller: VideoViewController.remote(
+                            rtcEngine: widget.engine,
+                            canvas: VideoCanvas(uid: widget.remoteHostUid),
+                            connection: RtcConnection(channelId: widget.roomId),
+                          ),
+                        )
+                      : const Center(
+                          child: CircularProgressIndicator(color: AppTheme.primaryContainer),
+                        )),
+            ),
           ),
           Positioned(
             top: 16,
