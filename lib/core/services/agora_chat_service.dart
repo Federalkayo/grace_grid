@@ -20,6 +20,12 @@ class AgoraChatMessageData {
   final bool isRead;
   final Map<String, String> reactions; // userId -> emoji
   final bool isForwarded;
+  // Populated when this message is a reply to an earlier one — a lightweight
+  // snapshot of the original, not a live reference, so it still renders even
+  // if the original message is later deleted.
+  final String? replyToId;
+  final String? replyToSenderName;
+  final String? replyToContent;
 
   const AgoraChatMessageData({
     required this.id,
@@ -33,7 +39,12 @@ class AgoraChatMessageData {
     this.isRead = false,
     this.reactions = const {},
     this.isForwarded = false,
+    this.replyToId,
+    this.replyToSenderName,
+    this.replyToContent,
   });
+
+  bool get isReply => replyToId != null && replyToId!.isNotEmpty;
 
   AgoraChatMessageData copyWith({
     String? id,
@@ -47,6 +58,9 @@ class AgoraChatMessageData {
     bool? isRead,
     Map<String, String>? reactions,
     bool? isForwarded,
+    String? replyToId,
+    String? replyToSenderName,
+    String? replyToContent,
   }) {
     return AgoraChatMessageData(
       id: id ?? this.id,
@@ -60,6 +74,9 @@ class AgoraChatMessageData {
       isRead: isRead ?? this.isRead,
       reactions: reactions ?? this.reactions,
       isForwarded: isForwarded ?? this.isForwarded,
+      replyToId: replyToId ?? this.replyToId,
+      replyToSenderName: replyToSenderName ?? this.replyToSenderName,
+      replyToContent: replyToContent ?? this.replyToContent,
     );
   }
 
@@ -229,4 +246,3 @@ class AgoraChatService {
     _readAckController.close();
   }
 }
-

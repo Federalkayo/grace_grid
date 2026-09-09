@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../core/theme/app_theme.dart';
@@ -31,6 +32,7 @@ class FellowshipChatScreen extends ConsumerStatefulWidget {
 class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
   final TextEditingController _msgController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final FocusNode _composerFocusNode = FocusNode();
   Timer? _typingTimer;
 
   String get _effectivePartnerId => widget.partnerId.isNotEmpty ? widget.partnerId : widget.partnerName;
@@ -69,6 +71,12 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
     _scrollToBottom();
   }
 
+  void _handleSwipeToReply(AgoraChatMessageData msg) {
+    HapticFeedback.selectionClick();
+    ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).setReplyTo(msg);
+    _composerFocusNode.requestFocus();
+  }
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -87,6 +95,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
     _msgController.removeListener(_onTextChanged);
     _msgController.dispose();
     _scrollController.dispose();
+    _composerFocusNode.dispose();
     super.dispose();
   }
 
@@ -363,6 +372,21 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
   @override
   Widget build(BuildContext context) {
     final chatState = ref.watch(fellowshipChatProvider(_effectivePartnerId));
+
+    // Auto-scroll whenever the message list actually grows — covers incoming
+    // messages from the partner, the initial local-cache/Firestore load, and
+    // our own sent messages arriving back via the Firestore stream. Before
+    // this, only _handleSend() scrolled, so anything that wasn't the local
+    // user hitting "send" landed below the fold, hidden behind the input bar.
+    ref.listen<FellowshipChatState>(
+      fellowshipChatProvider(_effectivePartnerId),
+      (previous, next) {
+        if (previous == null || next.messages.length != previous.messages.length) {
+          _scrollToBottom();
+        }
+      },
+    );
+
     final connStatus = ref.watch(agoraConnectionStatusProvider).value ?? AgoraConnectionStatus.demoMode;
     final authProfile = ref.watch(mockAuthNotifierProvider).profile;
     final conversations = ref.watch(conversationsListProvider);
@@ -521,7 +545,28 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                              (msg.senderName.isNotEmpty && msg.senderName.toLowerCase() == authProfile.name.toLowerCase()) ||
                              (msg.isMe && (msg.senderId == authProfile.id || msg.senderId == 'user_me'));
 
-                return Align(
+                return Dismissible(
+                  // Keyed on message id so Flutter doesn't confuse rows as the
+                  // list reorders/streams in new items.
+                  key: ValueKey('reply_${msg.id}'),
+                  direction: DismissDirection.startToEnd,
+                  // Only needs a short drag to trigger — this never actually
+                  // removes the message, confirmDismiss always returns false
+                  // below, so Dismissible just animates the bubble back to
+                  // rest afterward.
+                  dismissThresholds: const {DismissDirection.startToEnd: 0.28},
+                  background: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 4),
+                      child: Icon(Icons.reply_rounded, color: AppTheme.primaryContainer.withValues(alpha: 0.8)),
+                    ),
+                  ),
+                  confirmDismiss: (_) async {
+                    _handleSwipeToReply(msg);
+                    return false;
+                  },
+                  child: Align(
                   alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
                   child: Container(
                     constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
@@ -540,6 +585,39 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                if (msg.isReply)
+                                  Container(
+                                    margin: const EdgeInsets.only(bottom: 6),
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.surfaceLowest.withValues(alpha: 0.5),
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border(
+                                        left: BorderSide(color: AppTheme.primaryContainer, width: 3),
+                                      ),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          (msg.replyToSenderName?.isNotEmpty == true)
+                                              ? msg.replyToSenderName!
+                                              : _effectivePartnerName,
+                                          style: const TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: AppTheme.primaryContainer,
+                                          ),
+                                        ),
+                                        Text(
+                                          msg.replyToContent ?? '',
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 if (msg.isForwarded)
                                   const Padding(
                                     padding: EdgeInsets.only(bottom: 4),
@@ -634,6 +712,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                       ),
                     ),
                   ),
+                  ),
                 );
               },
             ),
@@ -669,6 +748,49 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
               ),
             ),
 
+          // Reply Preview — shown above the composer while replying to a
+          // swiped message, WhatsApp-style. Dismissed by the X or by sending.
+          if (chatState.replyingTo != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: const BoxDecoration(
+                color: AppTheme.surfaceLow,
+                border: Border(top: BorderSide(color: AppTheme.emeraldStrokeAlpha15)),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 3,
+                    height: 32,
+                    color: AppTheme.primaryContainer,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          (chatState.replyingTo!.isMe) ? 'Replying to yourself' : 'Replying to ${chatState.replyingTo!.senderName.isNotEmpty ? chatState.replyingTo!.senderName : _effectivePartnerName}',
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryContainer),
+                        ),
+                        Text(
+                          chatState.replyingTo!.content,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close, size: 18, color: AppTheme.onSurfaceVariant),
+                    onPressed: () => ref.read(fellowshipChatProvider(_effectivePartnerId).notifier).clearReplyTo(),
+                    tooltip: 'Cancel reply',
+                  ),
+                ],
+              ),
+            ),
+
           // Chat Input Bar
           Container(
             padding: const EdgeInsets.all(12),
@@ -694,6 +816,7 @@ class _FellowshipChatScreenState extends ConsumerState<FellowshipChatScreen> {
                     ),
                     child: TextField(
                       controller: _msgController,
+                      focusNode: _composerFocusNode,
                       style: const TextStyle(fontSize: 14, color: AppTheme.onSurface),
                       onSubmitted: (_) => _handleSend(),
                       decoration: const InputDecoration(
