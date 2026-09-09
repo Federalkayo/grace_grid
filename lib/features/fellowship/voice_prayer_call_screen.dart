@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:cloud_functions/cloud_functions.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -9,6 +8,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_card.dart';
 import '../../core/widgets/sanctuary_chips_badges.dart';
 import '../../core/providers/mock_auth_provider.dart';
+import '../../core/services/agora_token_service.dart';
 import '../../core/services/chat_firestore_service.dart';
 import '../../core/services/call_signaling_service.dart';
 
@@ -67,10 +67,7 @@ class _VoicePrayerCallScreenState extends ConsumerState<VoicePrayerCallScreen> w
     }
 
     try {
-      final result = await FirebaseFunctions.instance
-          .httpsCallable('generateAgoraRtcToken')
-          .call({'channelName': chatId});
-      final data = result.data as Map;
+      final data = await fetchAgoraRtcToken(chatId);
 
       final engine = createAgoraRtcEngine();
       await engine.initialize(RtcEngineContext(appId: data['appId'] as String));
