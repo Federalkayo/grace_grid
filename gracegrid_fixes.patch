@@ -1,0 +1,472 @@
+diff --git a/lib/core/services/feed_firestore_service.dart b/lib/core/services/feed_firestore_service.dart
+index 9795449..585b5db 100644
+--- a/lib/core/services/feed_firestore_service.dart
++++ b/lib/core/services/feed_firestore_service.dart
+@@ -35,7 +35,13 @@ class FeedFirestoreService {
+     try {
+       final ref = _postsRef;
+       if (ref == null) return null;
+-      final docRef = await ref.add(post.toMap());
++      final data = post.toMap();
++      // Order by the server's clock, not the poster's device clock — if a
++      // phone's clock is off, orderBy('createdAt') would put that user's
++      // post in a different position for every viewer than it shows for
++      // the poster themselves.
++      data['createdAt'] = FieldValue.serverTimestamp();
++      final docRef = await ref.add(data);
+       return docRef.id;
+     } catch (e) {
+       debugPrint('Firestore createPost error: $e');
+@@ -98,7 +104,9 @@ class FeedFirestoreService {
+ 
+       final batch = db.batch();
+       final commentDocRef = ref.doc(postId).collection('comments').doc();
+-      batch.set(commentDocRef, comment.toMap());
++      final data = comment.toMap();
++      data['createdAt'] = FieldValue.serverTimestamp();
++      batch.set(commentDocRef, data);
+ 
+       final postDocRef = ref.doc(postId);
+       batch.update(postDocRef, {
+@@ -165,7 +173,9 @@ class FeedFirestoreService {
+     try {
+       final ref = _storiesRef;
+       if (ref == null) return null;
+-      final docRef = await ref.add(story.toMap());
++      final data = story.toMap();
++      data['createdAt'] = FieldValue.serverTimestamp();
++      final docRef = await ref.add(data);
+       return docRef.id;
+     } catch (e) {
+       debugPrint('Firestore createStory error: $e');
+diff --git a/lib/features/feed/models/feed_post_model.dart b/lib/features/feed/models/feed_post_model.dart
+index 4008410..fc3e61d 100644
+--- a/lib/features/feed/models/feed_post_model.dart
++++ b/lib/features/feed/models/feed_post_model.dart
+@@ -340,3 +340,57 @@ class SanctuaryStory {
+     );
+   }
+ }
++
++/// A single story "bubble" for one author, holding every story they've
++/// posted in the last 24h as ordered segments (oldest first) so the
++/// viewer plays through THAT author's segments only — never other
++/// people's stories.
++class StoryGroup {
++  final String authorId;
++  final String userName;
++  final String? userAvatar;
++  final String roleTag;
++  final bool isLive;
++  final List<SanctuaryStory> stories;
++
++  StoryGroup({
++    required this.authorId,
++    required this.userName,
++    this.userAvatar,
++    required this.roleTag,
++    this.isLive = false,
++    required this.stories,
++  });
++
++  bool get hasUnread => stories.any((s) => s.hasUnread);
++
++  /// Groups a flat, already-24h-filtered story list by author, preserving
++  /// each author's most-recent-first ordering in the bar while playing
++  /// each author's own segments oldest-first inside the viewer.
++  static List<StoryGroup> fromStories(List<SanctuaryStory> stories) {
++    final Map<String, List<SanctuaryStory>> byAuthor = {};
++    final List<String> authorOrder = [];
++
++    for (final story in stories) {
++      final key = story.authorId.isNotEmpty ? story.authorId : story.id;
++      if (!byAuthor.containsKey(key)) {
++        byAuthor[key] = [];
++        authorOrder.add(key);
++      }
++      byAuthor[key]!.add(story);
++    }
++
++    return authorOrder.map((key) {
++      final segments = byAuthor[key]!..sort((a, b) => a.createdAt.compareTo(b.createdAt));
++      final latest = segments.last;
++      return StoryGroup(
++        authorId: key,
++        userName: latest.userName,
++        userAvatar: latest.userAvatar,
++        roleTag: latest.roleTag,
++        isLive: segments.any((s) => s.isLive),
++        stories: segments,
++      );
++    }).toList();
++  }
++}
+diff --git a/lib/features/feed/providers/feed_provider.dart b/lib/features/feed/providers/feed_provider.dart
+index 4ae4dc1..c2eae63 100644
+--- a/lib/features/feed/providers/feed_provider.dart
++++ b/lib/features/feed/providers/feed_provider.dart
+@@ -3,9 +3,14 @@ import 'package:flutter/foundation.dart';
+ import 'package:flutter_riverpod/flutter_riverpod.dart';
+ import 'package:image_picker/image_picker.dart';
+ import '../../../core/data/mock_community_data.dart';
++import '../../../core/providers/auth_provider.dart';
+ import '../../../core/services/feed_firestore_service.dart';
+ import '../../../core/services/firebase_storage_service.dart';
+ 
++/// Stories older than this are treated as expired and dropped from the
++/// feed, the same way a real "Status"/"Story" feature works.
++const Duration kStoryLifetime = Duration(hours: 24);
++
+ class FeedState {
+   final List<FeedPost> posts;
+   final List<SanctuaryStory> stories;
+@@ -21,6 +26,10 @@ class FeedState {
+     this.errorMessage,
+   });
+ 
++  /// Stories grouped by author so one bubble in the story bar = one
++  /// person, and the viewer only ever plays that person's own segments.
++  List<StoryGroup> get groupedActiveStories => StoryGroup.fromStories(stories);
++
+   FeedState copyWith({
+     List<FeedPost>? posts,
+     List<SanctuaryStory>? stories,
+@@ -39,20 +48,58 @@ class FeedState {
+ }
+ 
+ class FeedNotifier extends StateNotifier<FeedState> {
++  final Ref _ref;
+   final FeedFirestoreService _firestoreService = FeedFirestoreService();
+   final FirebaseStorageService _storageService = FirebaseStorageService();
+   StreamSubscription<List<FeedPost>>? _firestoreSubscription;
+   StreamSubscription<List<SanctuaryStory>>? _storiesSubscription;
++  String _currentUserId = '';
+ 
+-  FeedNotifier() : super(FeedState(posts: const [], stories: const [], isLoading: true)) {
++  FeedNotifier(this._ref) : super(FeedState(posts: const [], stories: const [], isLoading: true)) {
++    _currentUserId = _resolveUserId();
+     _initFirestoreStream();
++
++    // Re-subscribe with the right currentUserId once auth resolves/changes,
++    // otherwise every post loads as "not yet Amen'd" even for posts the
++    // user already Amen'd, which is what let the count climb on every tap.
++    _ref.listen<AuthState>(authNotifierProvider, (previous, next) {
++      final newId = next.profile.id;
++      if (newId.isNotEmpty && newId != _currentUserId) {
++        _currentUserId = newId;
++        _initFirestoreStream();
++      }
++    });
++  }
++
++  String _resolveUserId() {
++    final id = _ref.read(authNotifierProvider).profile.id;
++    // Match the same 'user_me' guest fallback used by the rest of the
++    // feed UI so the id written on Amen/comment actions always matches
++    // the id the posts/comments streams read back against.
++    return id.isNotEmpty ? id : 'user_me';
+   }
+ 
+   void _initFirestoreStream() {
+     try {
+-      _firestoreSubscription = _firestoreService.getPostsStream().listen(
++      _firestoreSubscription?.cancel();
++      _storiesSubscription?.cancel();
++
++      _firestoreSubscription = _firestoreService.getPostsStream(currentUserId: _currentUserId).listen(
+         (firestorePosts) {
+-          state = state.copyWith(posts: firestorePosts, isLoading: false);
++          // Preserve any locally-cached comments for posts that already
++          // had them loaded, instead of wiping them back to empty on
++          // every unrelated collection update (e.g. someone else Amen'ing
++          // a different post) — this is what made comments "disappear".
++          final previousById = {for (final p in state.posts) p.id: p};
++          final mergedPosts = firestorePosts.map((post) {
++            final previous = previousById[post.id];
++            if (previous == null || previous.comments.isEmpty) return post;
++            final knownIds = post.comments.map((c) => c.id).toSet();
++            final preserved = previous.comments.where((c) => !knownIds.contains(c.id));
++            return post.copyWith(comments: [...post.comments, ...preserved]);
++          }).toList();
++
++          state = state.copyWith(posts: mergedPosts, isLoading: false);
+         },
+         onError: (e) {
+           debugPrint('Firestore posts stream notice: $e');
+@@ -60,9 +107,12 @@ class FeedNotifier extends StateNotifier<FeedState> {
+         },
+       );
+ 
+-      _storiesSubscription = _firestoreService.getStoriesStream().listen(
++      _storiesSubscription = _firestoreService.getStoriesStream(currentUserId: _currentUserId).listen(
+         (firestoreStories) {
+-          state = state.copyWith(stories: firestoreStories);
++          final now = DateTime.now();
++          final activeStories =
++              firestoreStories.where((s) => now.difference(s.createdAt) < kStoryLifetime).toList();
++          state = state.copyWith(stories: activeStories);
+         },
+         onError: (e) {
+           debugPrint('Firestore stories stream notice: $e');
+@@ -79,22 +129,27 @@ class FeedNotifier extends StateNotifier<FeedState> {
+   }
+ 
+   /// Toggle Amen / Like on a post
+-  Future<void> toggleAmen(String postId, {String userId = 'user_me'}) async {
++  Future<void> toggleAmen(String postId, {String? userId}) async {
++    // Always fall back to the resolved auth id, not a hardcoded literal —
++    // otherwise a signed-in user's writes go under one id ('user_me')
++    // while the stream reads back against their real uid, so hasSaidAmen
++    // never matches and the count just climbs on every tap.
++    final effectiveUserId = userId ?? _currentUserId;
+     final updatedPosts = state.posts.map((post) {
+       if (post.id == postId) {
+         final newHasSaidAmen = !post.hasSaidAmen;
+         final newCount = post.amenCount + (newHasSaidAmen ? 1 : -1);
+         final newLikedIds = List<String>.from(post.likedUserIds);
+         if (newHasSaidAmen) {
+-          newLikedIds.add(userId);
++          newLikedIds.add(effectiveUserId);
+         } else {
+-          newLikedIds.remove(userId);
++          newLikedIds.remove(effectiveUserId);
+         }
+ 
+         // Fire & forget firestore update
+         _firestoreService.toggleAmen(
+           postId: postId,
+-          userId: userId,
++          userId: effectiveUserId,
+           isCurrentlyLiked: post.hasSaidAmen,
+         );
+ 
+@@ -117,15 +172,16 @@ class FeedNotifier extends StateNotifier<FeedState> {
+     required String authorName,
+     String? authorAvatar,
+     required String authorTitle,
+-    String userId = 'user_me',
++    String? userId,
+   }) async {
++    final effectiveUserId = userId ?? _currentUserId;
+     final newComment = PostComment(
+       id: 'comment-${DateTime.now().millisecondsSinceEpoch}',
+       postId: postId,
+       authorName: authorName,
+       authorAvatar: authorAvatar,
+       authorTitle: authorTitle,
+-      authorId: userId,
++      authorId: effectiveUserId,
+       text: text,
+       timeAgo: 'Just now',
+       createdAt: DateTime.now(),
+@@ -149,7 +205,8 @@ class FeedNotifier extends StateNotifier<FeedState> {
+   }
+ 
+   /// Toggle like on a comment
+-  void toggleCommentLike(String postId, String commentId, {String userId = 'user_me', PostComment? commentObj}) {
++  void toggleCommentLike(String postId, String commentId, {String? userId, PostComment? commentObj}) {
++    final effectiveUserId = userId ?? _currentUserId;
+     final updatedPosts = state.posts.map((post) {
+       if (post.id == postId) {
+         final comments = List<PostComment>.from(post.comments);
+@@ -163,9 +220,9 @@ class FeedNotifier extends StateNotifier<FeedState> {
+ 
+           final newLikedUsers = List<String>.from(c.likedUserIds);
+           if (newIsLiked) {
+-            if (!newLikedUsers.contains(userId)) newLikedUsers.add(userId);
++            if (!newLikedUsers.contains(effectiveUserId)) newLikedUsers.add(effectiveUserId);
+           } else {
+-            newLikedUsers.remove(userId);
++            newLikedUsers.remove(effectiveUserId);
+           }
+ 
+           comments[index] = PostComment(
+@@ -186,7 +243,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
+           _firestoreService.toggleCommentLike(
+             postId: postId,
+             commentId: commentId,
+-            userId: userId,
++            userId: effectiveUserId,
+             isCurrentlyLiked: currentlyLiked,
+           );
+         } else if (commentObj != null) {
+@@ -196,9 +253,9 @@ class FeedNotifier extends StateNotifier<FeedState> {
+ 
+           final newLikedUsers = List<String>.from(commentObj.likedUserIds);
+           if (newIsLiked) {
+-            if (!newLikedUsers.contains(userId)) newLikedUsers.add(userId);
++            if (!newLikedUsers.contains(effectiveUserId)) newLikedUsers.add(effectiveUserId);
+           } else {
+-            newLikedUsers.remove(userId);
++            newLikedUsers.remove(effectiveUserId);
+           }
+ 
+           final updatedComment = PostComment(
+@@ -221,7 +278,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
+           _firestoreService.toggleCommentLike(
+             postId: postId,
+             commentId: commentId,
+-            userId: userId,
++            userId: effectiveUserId,
+             isCurrentlyLiked: currentlyLiked,
+           );
+         }
+@@ -246,8 +303,9 @@ class FeedNotifier extends StateNotifier<FeedState> {
+     XFile? imageFile,
+     String? imageUrlPreset,
+     String? imageCaption,
+-    String userId = 'user_me',
++    String? userId,
+   }) async {
++    final effectiveUserId = userId ?? _currentUserId;
+     state = state.copyWith(isLoading: true);
+ 
+     try {
+@@ -256,7 +314,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
+       if (imageFile != null) {
+         final uploadedUrl = await _storageService.uploadPostImage(
+           imageFile: imageFile,
+-          userId: userId,
++          userId: effectiveUserId,
+         );
+         if (uploadedUrl == null) {
+           state = state.copyWith(
+@@ -273,7 +331,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
+         authorName: authorName,
+         authorAvatar: authorAvatar ?? 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&q=80',
+         authorTitle: authorTitle,
+-        authorId: userId,
++        authorId: effectiveUserId,
+         authorHandle: authorHandle,
+         timeAgo: 'Just now',
+         createdAt: DateTime.now(),
+@@ -284,7 +342,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
+         imageCaption: imageCaption?.isNotEmpty == true ? imageCaption : null,
+         amenCount: 1,
+         hasSaidAmen: true,
+-        likedUserIds: [userId],
++        likedUserIds: [effectiveUserId],
+         commentCount: 0,
+         comments: [],
+       );
+@@ -304,7 +362,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
+ 
+   /// Create a new status story with image & caption
+   Future<bool> createStory({
+-    String userId = 'user_me',
++    String? userId,
+     required String userName,
+     String? userAvatar,
+     required String roleTag,
+@@ -313,12 +371,13 @@ class FeedNotifier extends StateNotifier<FeedState> {
+     String? imageUrlPreset,
+     String? caption,
+   }) async {
++    final effectiveUserId = userId ?? _currentUserId;
+     try {
+       String? finalImageUrl = imageUrlPreset;
+       if (imageFile != null) {
+         final uploadedUrl = await _storageService.uploadPostImage(
+           imageFile: imageFile,
+-          userId: userId,
++          userId: effectiveUserId,
+         );
+         if (uploadedUrl == null) {
+           state = state.copyWith(
+@@ -331,7 +390,7 @@ class FeedNotifier extends StateNotifier<FeedState> {
+ 
+       final newStory = SanctuaryStory(
+         id: 'story-${DateTime.now().millisecondsSinceEpoch}',
+-        authorId: userId,
++        authorId: effectiveUserId,
+         userName: userName,
+         userAvatar: userAvatar,
+         roleTag: roleTag,
+@@ -342,15 +401,11 @@ class FeedNotifier extends StateNotifier<FeedState> {
+         createdAt: DateTime.now(),
+       );
+ 
+-      // Keep user status circle at index 0 and insert new story at index 1
+-      final currentStories = List<SanctuaryStory>.from(state.stories);
+-      if (currentStories.isNotEmpty) {
+-        currentStories.insert(1, newStory);
+-      } else {
+-        currentStories.add(newStory);
+-      }
+-
+-      state = state.copyWith(stories: currentStories);
++      // Just append — grouping by authorId (via StoryGroup.fromStories)
++      // is what puts every one of this author's active stories under
++      // their single bubble as extra segments, so there's no need to
++      // hand-place this at a magic index.
++      state = state.copyWith(stories: [...state.stories, newStory]);
+ 
+       // Sync to Firestore
+       await _firestoreService.createStory(newStory);
+@@ -370,5 +425,5 @@ class FeedNotifier extends StateNotifier<FeedState> {
+ }
+ 
+ final feedProvider = StateNotifierProvider<FeedNotifier, FeedState>((ref) {
+-  return FeedNotifier();
++  return FeedNotifier(ref);
+ });
+diff --git a/lib/features/feed/sanctuary_community_feed_screen.dart b/lib/features/feed/sanctuary_community_feed_screen.dart
+index 3afbafa..d5de526 100644
+--- a/lib/features/feed/sanctuary_community_feed_screen.dart
++++ b/lib/features/feed/sanctuary_community_feed_screen.dart
+@@ -280,9 +280,14 @@ SizedBox(
+               child: ListView.builder(
+                 scrollDirection: Axis.horizontal,
+                 padding: const EdgeInsets.symmetric(horizontal: 16),
+-                itemCount: feedState.stories.length + 1,
++                itemCount: feedState.groupedActiveStories.length + 1,
+                 itemBuilder: (context, index) {
+                   final isUser = index == 0;
++                  // Group stories by author so a person who posted 2
++                  // stories gets ONE bubble with 2 progress segments,
++                  // and tapping it only ever plays their own stories —
++                  // never rolls into the next person's story bubble.
++                  final StoryGroup? group = isUser ? null : feedState.groupedActiveStories[index - 1];
+                   final SanctuaryStory story = isUser
+                       ? SanctuaryStory(
+                           id: 'my-status',
+@@ -291,7 +296,7 @@ SizedBox(
+                           roleTag: 'Believer',
+                           hasUnread: false,
+                         )
+-                      : feedState.stories[index - 1];
++                      : group!.stories.last;
+ 
+                   return Padding(
+                     padding: const EdgeInsets.only(right: 14),
+@@ -311,8 +316,8 @@ SizedBox(
+                         } else {
+                           SanctuaryStoryViewerModal.show(
+                             context,
+-                            stories: feedState.stories,
+-                            initialIndex: index - 1,
++                            stories: group!.stories,
++                            initialIndex: 0,
+                           );
+                         }
+                       },
+@@ -325,7 +330,9 @@ SizedBox(
+                                 decoration: BoxDecoration(
+                                   shape: BoxShape.circle,
+                                   border: Border.all(
+-                                    color: story.hasUnread ? AppTheme.primaryContainer : AppTheme.emeraldStrokeAlpha15,
++                                    color: (isUser ? story.hasUnread : group!.hasUnread)
++                                        ? AppTheme.primaryContainer
++                                        : AppTheme.emeraldStrokeAlpha15,
+                                     width: 2,
+                                   ),
+                                 ),
+@@ -348,7 +355,7 @@ SizedBox(
+                                   },
+                                 ),
+                               ),
+-                              if (story.isLive)
++                              if (!isUser && group!.isLive)
+                                 Positioned(
+                                   bottom: 0,
+                                   right: 0,

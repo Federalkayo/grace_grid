@@ -237,7 +237,6 @@ class SanctuaryStory {
   final String userName;
   final String? userAvatar;
   final String roleTag;
-  final bool hasUnread;
   final String? storyText;
   final String? imageUrl;
   final String? caption;
@@ -245,6 +244,12 @@ class SanctuaryStory {
   final DateTime createdAt;
   int amenCount;
   bool hasSaidAmen;
+  // Every user id who has already opened this specific story. Read state
+  // has to live per-viewer like this — a single shared hasUnread flag
+  // means the ring going gray for the person who watched it would turn
+  // it gray for everyone else too, which isn't how WhatsApp/IG stories
+  // work.
+  List<String> viewedByUserIds;
 
   SanctuaryStory({
     required this.id,
@@ -252,7 +257,6 @@ class SanctuaryStory {
     required this.userName,
     this.userAvatar,
     required this.roleTag,
-    this.hasUnread = true,
     this.storyText,
     this.imageUrl,
     this.caption,
@@ -260,7 +264,13 @@ class SanctuaryStory {
     DateTime? createdAt,
     this.amenCount = 0,
     this.hasSaidAmen = false,
-  }) : createdAt = createdAt ?? DateTime.now();
+    List<String>? viewedByUserIds,
+  })  : createdAt = createdAt ?? DateTime.now(),
+        viewedByUserIds = viewedByUserIds ?? [];
+
+  /// Whether THIS story is still unread for the given viewer. Every
+  /// viewer gets their own answer, independent of who else has seen it.
+  bool isUnreadFor(String userId) => userId.isEmpty || !viewedByUserIds.contains(userId);
 
   factory SanctuaryStory.fromMap(Map<String, dynamic> data, String id, {String currentUserId = ''}) {
     final rawTimestamp = data['createdAt'];
@@ -274,6 +284,7 @@ class SanctuaryStory {
     }
 
     final likes = List<String>.from(data['likedUserIds'] ?? []);
+    final viewedBy = List<String>.from(data['viewedByUserIds'] ?? []);
 
     return SanctuaryStory(
       id: id,
@@ -281,7 +292,6 @@ class SanctuaryStory {
       userName: data['userName'] ?? 'Sanctuary Believer',
       userAvatar: data['userAvatar'],
       roleTag: data['roleTag'] ?? 'Believer',
-      hasUnread: data['hasUnread'] ?? true,
       storyText: data['storyText'],
       imageUrl: data['imageUrl'],
       caption: data['caption'],
@@ -289,6 +299,7 @@ class SanctuaryStory {
       createdAt: created,
       amenCount: data['amenCount'] ?? 0,
       hasSaidAmen: currentUserId.isNotEmpty && likes.contains(currentUserId),
+      viewedByUserIds: viewedBy,
     );
   }
 
@@ -298,13 +309,13 @@ class SanctuaryStory {
       'userName': userName,
       'userAvatar': userAvatar,
       'roleTag': roleTag,
-      'hasUnread': hasUnread,
       'storyText': storyText,
       'imageUrl': imageUrl,
       'caption': caption,
       'isLive': isLive,
       'createdAt': Timestamp.fromDate(createdAt),
       'amenCount': amenCount,
+      'viewedByUserIds': viewedByUserIds,
     };
   }
 
@@ -314,7 +325,6 @@ class SanctuaryStory {
     String? userName,
     String? userAvatar,
     String? roleTag,
-    bool? hasUnread,
     String? storyText,
     String? imageUrl,
     String? caption,
@@ -322,6 +332,7 @@ class SanctuaryStory {
     DateTime? createdAt,
     int? amenCount,
     bool? hasSaidAmen,
+    List<String>? viewedByUserIds,
   }) {
     return SanctuaryStory(
       id: id ?? this.id,
@@ -329,7 +340,6 @@ class SanctuaryStory {
       userName: userName ?? this.userName,
       userAvatar: userAvatar ?? this.userAvatar,
       roleTag: roleTag ?? this.roleTag,
-      hasUnread: hasUnread ?? this.hasUnread,
       storyText: storyText ?? this.storyText,
       imageUrl: imageUrl ?? this.imageUrl,
       caption: caption ?? this.caption,
@@ -337,6 +347,66 @@ class SanctuaryStory {
       createdAt: createdAt ?? this.createdAt,
       amenCount: amenCount ?? this.amenCount,
       hasSaidAmen: hasSaidAmen ?? this.hasSaidAmen,
+      viewedByUserIds: viewedByUserIds ?? this.viewedByUserIds,
     );
+  }
+}
+
+/// A single story "bubble" for one author, holding every story they've
+/// posted in the last 24h as ordered segments (oldest first) so the
+/// viewer plays through THAT author's segments only — never other
+/// people's stories.
+class StoryGroup {
+  final String authorId;
+  final String userName;
+  final String? userAvatar;
+  final String roleTag;
+  final bool isLive;
+  final List<SanctuaryStory> stories;
+
+  StoryGroup({
+    required this.authorId,
+    required this.userName,
+    this.userAvatar,
+    required this.roleTag,
+    this.isLive = false,
+    required this.stories,
+  });
+
+  /// Per-segment read state for a specific viewer — true = still unread
+  /// for THAT viewer, in the same order as [stories]. One entry per ring
+  /// segment.
+  List<bool> unreadFlagsFor(String viewerId) => stories.map((s) => s.isUnreadFor(viewerId)).toList();
+
+  bool hasUnreadFor(String viewerId) => stories.any((s) => s.isUnreadFor(viewerId));
+
+  /// Groups a flat, already-24h-filtered story list by author, preserving
+  /// each author's most-recent-first ordering in the bar while playing
+  /// each author's own segments oldest-first inside the viewer.
+  static List<StoryGroup> fromStories(List<SanctuaryStory> stories) {
+    final Map<String, List<SanctuaryStory>> byAuthor = {};
+    final List<String> authorOrder = [];
+
+    for (final story in stories) {
+      final key = story.authorId.isNotEmpty ? story.authorId : story.id;
+      if (!byAuthor.containsKey(key)) {
+        byAuthor[key] = [];
+        authorOrder.add(key);
+      }
+      byAuthor[key]!.add(story);
+    }
+
+    return authorOrder.map((key) {
+      final segments = byAuthor[key]!..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final latest = segments.last;
+      return StoryGroup(
+        authorId: key,
+        userName: latest.userName,
+        userAvatar: latest.userAvatar,
+        roleTag: latest.roleTag,
+        isLive: segments.any((s) => s.isLive),
+        stories: segments,
+      );
+    }).toList();
   }
 }

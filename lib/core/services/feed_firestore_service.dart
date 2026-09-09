@@ -35,7 +35,13 @@ class FeedFirestoreService {
     try {
       final ref = _postsRef;
       if (ref == null) return null;
-      final docRef = await ref.add(post.toMap());
+      final data = post.toMap();
+      // Order by the server's clock, not the poster's device clock — if a
+      // phone's clock is off, orderBy('createdAt') would put that user's
+      // post in a different position for every viewer than it shows for
+      // the poster themselves.
+      data['createdAt'] = FieldValue.serverTimestamp();
+      final docRef = await ref.add(data);
       return docRef.id;
     } catch (e) {
       debugPrint('Firestore createPost error: $e');
@@ -97,8 +103,15 @@ class FeedFirestoreService {
       if (db == null || ref == null) return;
 
       final batch = db.batch();
-      final commentDocRef = ref.doc(postId).collection('comments').doc();
-      batch.set(commentDocRef, comment.toMap());
+      // Use the same id the comment already has locally, instead of
+      // letting Firestore auto-generate a different one — otherwise the
+      // on-screen "just sent" comment and the confirmed server copy have
+      // two different ids, the comments sheet can't tell they're the
+      // same comment, and it renders both = duplicate comments.
+      final commentDocRef = ref.doc(postId).collection('comments').doc(comment.id);
+      final data = comment.toMap();
+      data['createdAt'] = FieldValue.serverTimestamp();
+      batch.set(commentDocRef, data);
 
       final postDocRef = ref.doc(postId);
       batch.update(postDocRef, {
@@ -165,11 +178,28 @@ class FeedFirestoreService {
     try {
       final ref = _storiesRef;
       if (ref == null) return null;
-      final docRef = await ref.add(story.toMap());
+      final data = story.toMap();
+      data['createdAt'] = FieldValue.serverTimestamp();
+      final docRef = await ref.add(data);
       return docRef.id;
     } catch (e) {
       debugPrint('Firestore createStory error: $e');
       return null;
+    }
+  }
+
+  /// Record that a specific viewer has opened a specific story, so that
+  /// viewer's ring segment turns gray — and only theirs. Other viewers'
+  /// copies of this story document are untouched.
+  Future<void> markStoryViewed({required String storyId, required String userId}) async {
+    try {
+      final ref = _storiesRef;
+      if (ref == null || userId.isEmpty) return;
+      await ref.doc(storyId).update({
+        'viewedByUserIds': FieldValue.arrayUnion([userId]),
+      });
+    } catch (e) {
+      debugPrint('Firestore markStoryViewed error: $e');
     }
   }
 }
