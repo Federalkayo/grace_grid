@@ -231,6 +231,51 @@ class ChatFirestoreService {
     }
   }
 
+  /// Broadcast this user's typing state on the chat doc so the *other*
+  /// participant can see it in real time. Keyed by UID (like unreadCounts),
+  /// so each side only ever reads the other person's key — never its own.
+  Future<void> setTyping({
+    required String chatId,
+    required String userId,
+    required bool isTyping,
+  }) async {
+    try {
+      final ref = _chatsRef;
+      if (ref == null) return;
+      final chatDocRef = ref.doc(chatId);
+      // Same reasoning as markAsRead: don't let this create a doc without a
+      // 'participants' field before the first real message exists.
+      final snap = await chatDocRef.get();
+      if (!snap.exists) return;
+      await chatDocRef.set({
+        'typing': {userId.trim(): isTyping},
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Firestore setTyping error: $e');
+    }
+  }
+
+  /// Stream whether [partnerId] is currently typing in this chat. Reads only
+  /// the partner's key on purpose — this is what keeps your own typing from
+  /// ever being able to show up as "they're typing" on your own screen.
+  Stream<bool> getTypingStream({
+    required String chatId,
+    required String partnerId,
+  }) {
+    final ref = _chatsRef;
+    final cleanPartner = partnerId.trim();
+    if (ref == null || cleanPartner.isEmpty) return const Stream.empty();
+
+    return ref.doc(chatId).snapshots().map((snap) {
+      final data = snap.data();
+      if (data == null) return false;
+      final typing = Map<String, dynamic>.from(data['typing'] ?? {});
+      return typing[cleanPartner] == true;
+    }).handleError((e) {
+      debugPrint('Firestore getTypingStream error: $e');
+    });
+  }
+
   /// Toggle reaction on a message in Firestore
   Future<void> toggleReaction({
     required String chatId,
