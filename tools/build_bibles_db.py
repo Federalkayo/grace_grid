@@ -230,52 +230,92 @@ def build_database():
     print("Processing Yoruba (YOR) translation...")
     yor_url = "https://raw.githubusercontent.com/gray-adeyi/pygconverter/master/Yoruba%20bible.txt"
     raw_yor = fetch_url(yor_url, "yoruba_bible.txt")
-    
-    BOOK_NAMES_YOR = [
-        ('Genesisi', 'GEN'), ('Eksodu', 'EXO'), ('Lefitiku', 'LEV'), ('Numeri', 'NUM'), ('Deuteronomi', 'DEU'),
-        ('Joṣua', 'JSH'), ('Onidajọ', 'JDG'), ('Rutu', 'RUT'), ('1 Samueli', '1SA'), ('2 Samueli', '2SA'),
-        ('1 Ọba', '1KI'), ('2 Ọba', '2KI'), ('1 Kronika', '1CH'), ('2 Kronika', '2CH'), ('Esra', 'EZR'),
-        ('Nehemiah', 'NEH'), ('Esteri', 'EST'), ('Jobu', 'JOB'), ('Psalmu', 'PSA'), ('Owe', 'PRO'),
-        ('Oniwasu', 'ECC'), ('Orin', 'SNG'), ('Isaiah', 'ISA'), ('Jeremiah', 'JER'), ('Ekun', 'LAM'),
-        ('Esekieli', 'EZK'), ('Danieli', 'DAN'), ('Hosea', 'HOS'), ('Joeli', 'JOL'), ('Amosi', 'AMO'),
-        ('Obadiah', 'OBA'), ('Jonasi', 'JON'), ('Mika', 'MIC'), ('Nahumu', 'NAM'), ('Habakkuku', 'HAB'),
-        ('Sefaniah', 'ZEP'), ('Haggai', 'HAG'), ('Sekariah', 'ZEC'), ('Malaki', 'MAL'), ('Matteu', 'MAT'),
-        ('Marku', 'MRK'), ('Luku', 'LUK'), ('Johanu', 'JHN'), ('Iṣẹ', 'ACT'), ('Roma', 'ROM'),
-        ('1 Korinti', '1CO'), ('2 Korinti', '2CO'), ('Galatia', 'GAL'), ('Efesu', 'EPH'), ('Filipi', 'PHP'),
-        ('Kolosse', 'COL'), ('1 Tessalonika', '1TH'), ('2 Tessalonika', '2TH'), ('1 Timotiu', '1TI'),
-        ('2 Timotiu', '2TI'), ('Titu', 'TIT'), ('Filemoni', 'PHM'), ('Heberu', 'HEB'), ('Jakobu', 'JAS'),
-        ('1 Peteru', '1PE'), ('2 Peteru', '2PE'), ('1 Johanu', '1JN'), ('2 Johanu', '2JN'), ('3 Johanu', '3JN'),
-        ('Juda', 'JUD'), ('Iṣipaya', 'REV')
-    ]
-    
-    yor_lines = raw_yor.splitlines()
-    yor_verses = []
-    curr_b_id = 'GEN'
-    curr_ch = 1
-    
-    for line in yor_lines:
+
+    # NOTE on this parser (rewritten — the previous version silently
+    # corrupted ~17 of 66 books):
+    #
+    # 1. Heading detection previously used a hand-picked whitelist of
+    #    accented characters (e.g. Ẹ/ẹ, Ọ/ọ) that didn't cover every
+    #    Yoruba tone mark actually used in the source (e.g. 'ú', 'à').
+    #    Any chapter heading containing an uncovered character — like
+    #    "Ẹkún" (Lamentations) — silently failed to match at all, so its
+    #    verses got misattributed into whatever book/chapter was last
+    #    recognized. Fixed by using \D (Unicode-aware "not a digit")
+    #    for the title portion instead of a whitelist, with the leading
+    #    "1"/"2"/"3" numeral (for books like "1 Korinti") captured
+    #    separately since \D would otherwise exclude it too.
+    #
+    # 2. Book-name matching previously used substring containment
+    #    (`y_name in b_title`), scanned in book order. Short names could
+    #    match inside unrelated longer ones — e.g. "Orin" (Song of
+    #    Solomon) is a literal substring of "Korinti" (Corinthians), so
+    #    both books of Corinthians got silently absorbed into Song of
+    #    Solomon. Fixed with exact (normalized, case-insensitive) title
+    #    matching against a ground-truth table built by scanning every
+    #    real heading in the source once, rather than guessing spellings.
+    #
+    # 3. The book-index line at the very top of the file (e.g.
+    #    "|Old Testament| Genesisi Eksodu ... 1 Samueli 2 Samueli ...")
+    #    contains "<number> <word>" pairs that the verse regex would
+    #    happily parse as extra verses before any real heading had been
+    #    seen. Fixed by not collecting verses until the first real
+    #    chapter heading has been matched.
+
+    HEADING_RE = re.compile(r'^(?:([1-3])\s)?(\D{2,40}?)\s+(\d{1,3})$')
+    VERSE_RE = re.compile(r'(?:^|\s)(\d+)\s+([^0-9]+?)(?=\s+\d+\s+|$)')
+
+    # Ground truth: scan every heading-shaped line once, segment into
+    # books by chapter-number resets, and take the (single, consistent)
+    # title text actually used per book — rather than guessing spellings.
+    all_headings = []
+    for line in raw_yor.splitlines():
         line_s = line.strip()
         if not line_s:
             continue
-            
-        ch_match = re.match(r'^([1-3]?\s?[A-Za-zṢṣỌọẸẹÌìÓóỤụ\s]+)\s+(\d+)$', line_s)
-        if ch_match:
-            b_title, ch_num = ch_match.groups()
-            b_title = b_title.strip()
-            for y_name, b_id in BOOK_NAMES_YOR:
-                if y_name.lower() in b_title.lower():
-                    curr_b_id = b_id
-                    curr_ch = int(ch_num)
-                    break
-            continue
+        m = HEADING_RE.match(line_s)
+        if m:
+            num_prefix, title, ch_num = m.groups()
+            full_title = f"{num_prefix} {title.strip()}" if num_prefix else title.strip()
+            all_headings.append((full_title, int(ch_num)))
 
-        v_matches = list(re.finditer(r'(?:^|\s)(\d+)\s+([^0-9]+?)(?=\s+\d+\s+|$)', line_s))
-        if v_matches:
-            for m in v_matches:
-                v_num = int(m.group(1))
-                v_text = m.group(2).strip()
-                if v_text and len(v_text) > 2 and not v_text.startswith(('Samueli', 'Ọba', 'Kronika', 'Korinti', 'Tessalonika', 'Timotiu', 'Peteru', 'Johanu')):
-                    yor_verses.append(('YOR', curr_b_id, curr_ch, v_num, v_text))
+    book_order = [b[0] for b in BOOK_METADATA]
+    title_by_book = {}
+    book_idx = -1
+    prev_ch = None
+    for title, ch in all_headings:
+        if prev_ch is None or ch == 1:
+            book_idx += 1
+        prev_ch = ch
+        if book_idx < len(book_order):
+            title_by_book.setdefault(book_order[book_idx], title)
+    bid_by_title = {v.lower(): k for k, v in title_by_book.items()}
+
+    assert len(title_by_book) == 66, f"Expected to detect 66 books in YOR source, found {len(title_by_book)}"
+
+    yor_verses = []
+    curr_b_id, curr_ch = None, None
+    started = False
+
+    for line in raw_yor.splitlines():
+        line_s = line.strip()
+        if not line_s:
+            continue
+        m = HEADING_RE.match(line_s)
+        if m:
+            num_prefix, title, ch_num = m.groups()
+            full_title = f"{num_prefix} {title.strip()}" if num_prefix else title.strip()
+            bid = bid_by_title.get(full_title.lower())
+            if bid:
+                curr_b_id, curr_ch = bid, int(ch_num)
+                started = True
+            continue
+        if not started:
+            continue  # skip preface/book-index content before the first real heading
+        for vm in VERSE_RE.finditer(line_s):
+            v_num = int(vm.group(1))
+            v_text = vm.group(2).strip()
+            if v_text and len(v_text) > 2:
+                yor_verses.append(('YOR', curr_b_id, curr_ch, v_num, v_text))
 
     cursor.executemany(
         "INSERT INTO verses (translation, book_id, chapter, verse, text) VALUES (?, ?, ?, ?, ?)",

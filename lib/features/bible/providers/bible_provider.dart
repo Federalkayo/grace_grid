@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/services/bible_database_service.dart';
-import '../../profile/providers/profile_stats_provider.dart';
 
 class BibleState {
   final String selectedTranslation;
@@ -76,9 +75,8 @@ class BibleState {
 
 class BibleNotifier extends StateNotifier<BibleState> {
   final BibleDatabaseService _dbService = BibleDatabaseService();
-  final Ref _ref;
 
-  BibleNotifier(this._ref) : super(BibleState()) {
+  BibleNotifier() : super(BibleState()) {
     init();
   }
 
@@ -86,21 +84,32 @@ class BibleNotifier extends StateNotifier<BibleState> {
     state = state.copyWith(isLoading: true);
     try {
       final books = await _dbService.getBooks();
+
+      // Resume where the person left off, if they've read anything before.
+      // Falls back to the hardcoded default (John 3, KJV) only on a
+      // genuinely first-ever open, when nothing has been saved yet.
+      final lastPosition = await _dbService.getLastPosition();
+      final resumeBookId = lastPosition?.bookId ?? state.selectedBookId;
+      final resumeChapter = lastPosition?.chapter ?? state.selectedChapter;
+      final resumeTranslation = lastPosition?.translation ?? state.selectedTranslation;
+
       final currentBook = books.firstWhere(
-        (b) => b.bookId == state.selectedBookId,
+        (b) => b.bookId == resumeBookId,
         orElse: () => books.first,
       );
 
       final verses = await _dbService.getVerses(
-        translation: state.selectedTranslation,
+        translation: resumeTranslation,
         bookId: currentBook.bookId,
-        chapter: state.selectedChapter,
+        chapter: resumeChapter,
       );
 
       state = state.copyWith(
         books: books,
         selectedBook: currentBook,
         selectedBookId: currentBook.bookId,
+        selectedChapter: resumeChapter,
+        selectedTranslation: resumeTranslation,
         verses: verses,
         isLoading: false,
       );
@@ -116,23 +125,7 @@ class BibleNotifier extends StateNotifier<BibleState> {
     await _loadCurrentChapter();
   }
 
-  /// Records the chapter currently on screen as "read" (once verses have
-  /// actually loaded) before navigating away from it. Backs the real
-  /// Verses/Streak stats and Scripture Mastery Badges on the Profile screen.
-  Future<void> _markCurrentChapterRead() async {
-    final book = state.selectedBook;
-    if (book == null || state.verses.isEmpty || state.isLoading) return;
-    await _dbService.markChapterRead(
-      bookId: book.bookId,
-      bookName: book.name,
-      chapter: state.selectedChapter,
-      verseCount: state.verses.length,
-    );
-    _ref.read(journeyRefreshTickProvider.notifier).state++;
-  }
-
   Future<void> setBook(String bookId, {int chapter = 1, int? verse}) async {
-    await _markCurrentChapterRead();
     final book = state.books.firstWhere(
       (b) => b.bookId == bookId,
       orElse: () => state.books.first,
@@ -150,7 +143,6 @@ class BibleNotifier extends StateNotifier<BibleState> {
   }
 
   Future<void> setChapter(int chapter, {int? verse}) async {
-    await _markCurrentChapterRead();
     state = state.copyWith(
       selectedChapter: chapter,
       targetVerseNumber: verse,
@@ -198,6 +190,12 @@ class BibleNotifier extends StateNotifier<BibleState> {
         chapter: state.selectedChapter,
       );
       state = state.copyWith(verses: verses, isLoading: false);
+      // Fire-and-forget: don't block the reading experience on a disk write.
+      unawaited(_dbService.saveLastPosition(
+        translation: state.selectedTranslation,
+        bookId: state.selectedBookId,
+        chapter: state.selectedChapter,
+      ));
     } catch (e) {
       debugPrint('_loadCurrentChapter error: $e');
       state = state.copyWith(isLoading: false);
@@ -264,18 +262,8 @@ class BibleNotifier extends StateNotifier<BibleState> {
   void selectVerse(BibleVerse? verse) {
     state = state.copyWith(activeSelectedVerse: verse, clearSelectedVerse: verse == null);
   }
-
-  @override
-  void dispose() {
-    // Fire-and-forget: credit whatever chapter was on screen when the
-    // reader is closed (back button, tab switch, app close), not just
-    // when navigating to another chapter within the reader. Guarded since
-    // `_ref` may already be torn down by the time this resolves.
-    unawaited(_markCurrentChapterRead().catchError((_) {}));
-    super.dispose();
-  }
 }
 
 final bibleProvider = StateNotifierProvider<BibleNotifier, BibleState>((ref) {
-  return BibleNotifier(ref);
+  return BibleNotifier();
 });

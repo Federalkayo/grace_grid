@@ -182,6 +182,43 @@ class ReferenceMatch {
   });
 }
 
+/// A single entry in the user's real "Journey Activity" timeline —
+/// backs the Recent Journey Activity list on the Profile screen.
+class ActivityLogEntry {
+  final String type; // 'reading' | 'note' | 'prayer' | 'streak'
+  final String title;
+  final int createdAt;
+
+  ActivityLogEntry({
+    required this.type,
+    required this.title,
+    required this.createdAt,
+  });
+
+  factory ActivityLogEntry.fromMap(Map<String, dynamic> map) {
+    return ActivityLogEntry(
+      type: map['type'] as String? ?? 'reading',
+      title: map['title'] as String? ?? '',
+      createdAt: map['created_at'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  String get timeAgo {
+    final created = DateTime.fromMillisecondsSinceEpoch(createdAt);
+    final diff = DateTime.now().difference(created);
+    if (diff.inSeconds < 60) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min${diff.inMinutes == 1 ? '' : 's'} ago';
+    if (diff.inHours < 24) {
+      final now = DateTime.now();
+      final isToday = now.year == created.year && now.month == created.month && now.day == created.day;
+      return isToday ? 'Today • ${diff.inHours}h ago' : '${diff.inHours}h ago';
+    }
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays} days ago';
+    return '${(diff.inDays / 7).floor()} week${(diff.inDays / 7).floor() == 1 ? '' : 's'} ago';
+  }
+}
+
 class BibleDatabaseService {
   static final BibleDatabaseService _instance = BibleDatabaseService._internal();
   factory BibleDatabaseService() => _instance;
@@ -223,6 +260,11 @@ class BibleDatabaseService {
   final Map<String, int> _webHighlights = {};
   final Set<String> _webBookmarks = {};
 
+  // Web fallback storage for Journey/Activity tracking (Profile screen)
+  final Map<String, int> _webReadChapters = {}; // '${bookId}_$chapter' -> verseCount
+  final List<Map<String, dynamic>> _webActivityLog = [];
+  final Set<String> _webDailyActivityDates = {}; // 'yyyy-MM-dd'
+
   static final List<BibleBook> _webBooks = [
     BibleBook(bookId: 'GEN', name: 'Genesis', nameYoruba: 'Genesi', testament: 'OT', orderIndex: 1, chapterCount: 50),
     BibleBook(bookId: 'EXO', name: 'Exodus', nameYoruba: 'Eksodu', testament: 'OT', orderIndex: 2, chapterCount: 40),
@@ -261,33 +303,15 @@ class BibleDatabaseService {
 
     final docsDir = await getApplicationDocumentsDirectory();
     final dbPath = join(docsDir.path, 'bibles.db');
-    final versionMarkerPath = join(docsDir.path, 'bibles_db_version.txt');
 
-    // Bump this whenever assets/bibles/bibles.db is rebuilt/replaced. The db
-    // only used to get copied out of the bundle on the very first-ever app
-    // launch (`if (!exists)`), so a corrected bundled asset never reached
-    // devices that had already run the app once — this version check fixes
-    // that: mismatched version means the on-device copy is stale, so we
-    // overwrite it from the bundle again.
-    const currentBundledVersion = 2;
+    final exists = await File(dbPath).exists();
 
-    final dbFile = File(dbPath);
-    final exists = await dbFile.exists();
-    int? storedVersion;
-    try {
-      final marker = File(versionMarkerPath);
-      if (await marker.exists()) {
-        storedVersion = int.tryParse((await marker.readAsString()).trim());
-      }
-    } catch (_) {}
-
-    if (!exists || storedVersion != currentBundledVersion) {
+    if (!exists) {
       try {
         await Directory(dirname(dbPath)).create(recursive: true);
         ByteData data = await rootBundle.load('assets/bibles/bibles.db');
         List<int> bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-        await dbFile.writeAsBytes(bytes, flush: true);
-        await File(versionMarkerPath).writeAsString('$currentBundledVersion');
+        await File(dbPath).writeAsBytes(bytes, flush: true);
       } catch (e) {
         debugPrint('Error copying bibles.db asset: $e');
       }
@@ -310,56 +334,33 @@ class BibleDatabaseService {
     try {
       await db.execute('ALTER TABLE user_sermon_notes ADD COLUMN audio_path TEXT;');
     } catch (_) {}
-    // Simple key-value settings table — used for "resume where I left off"
-    // (last-read translation/book/chapter) without pulling in a whole new
-    // local-storage package just for a couple of strings.
+
+    // Journey/Activity tracking tables backing the real Profile stats,
+    // Scripture Mastery Badges, and Recent Journey Activity feed.
     await db.execute('''
-      CREATE TABLE IF NOT EXISTS user_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
+      CREATE TABLE IF NOT EXISTS user_read_chapters (
+        book_id TEXT NOT NULL,
+        chapter INTEGER NOT NULL,
+        verse_count INTEGER NOT NULL DEFAULT 0,
+        first_read_at INTEGER,
+        PRIMARY KEY (book_id, chapter)
       )
     ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_activity_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS user_daily_activity (
+        activity_date TEXT PRIMARY KEY
+      )
+    ''');
+
     return db;
-  }
-
-  /// Persist the current reading position so the reader can resume here
-  /// next time, instead of always opening to the same hardcoded chapter.
-  Future<void> saveLastPosition({
-    required String translation,
-    required String bookId,
-    required int chapter,
-  }) async {
-    if (kIsWeb) return;
-    try {
-      final db = await database;
-      final value = '$translation|$bookId|$chapter';
-      await db.insert(
-        'user_settings',
-        {'key': 'last_read_position', 'value': value},
-        conflictAlgorithm: ConflictAlgorithm.replace,
-      );
-    } catch (e) {
-      debugPrint('saveLastPosition error: $e');
-    }
-  }
-
-  /// Returns the last-saved reading position, or null if the person has
-  /// never read anything yet (first-ever open — falls back to the default).
-  Future<({String translation, String bookId, int chapter})?> getLastPosition() async {
-    if (kIsWeb) return null;
-    try {
-      final db = await database;
-      final rows = await db.query('user_settings', where: 'key = ?', whereArgs: ['last_read_position']);
-      if (rows.isEmpty) return null;
-      final parts = (rows.first['value'] as String).split('|');
-      if (parts.length != 3) return null;
-      final chapter = int.tryParse(parts[2]);
-      if (chapter == null) return null;
-      return (translation: parts[0], bookId: parts[1], chapter: chapter);
-    } catch (e) {
-      debugPrint('getLastPosition error: $e');
-      return null;
-    }
   }
 
   Future<List<BibleBook>> getBooks({String? testament}) async {
@@ -793,6 +794,171 @@ class BibleDatabaseService {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  // --- Journey / Activity Tracking (real Profile stats & badges) ---
+
+  String _todayKey() {
+    final now = DateTime.now();
+    return '${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _recordDailyActivity() async {
+    final today = _todayKey();
+    if (kIsWeb) {
+      _webDailyActivityDates.add(today);
+      return;
+    }
+    final db = await database;
+    await db.insert(
+      'user_daily_activity',
+      {'activity_date': today},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  Future<void> _addActivityLogEntry({required String type, required String title}) async {
+    final createdAt = DateTime.now().millisecondsSinceEpoch;
+    if (kIsWeb) {
+      _webActivityLog.insert(0, {'type': type, 'title': title, 'created_at': createdAt});
+      return;
+    }
+    final db = await database;
+    await db.insert('user_activity_log', {
+      'type': type,
+      'title': title,
+      'created_at': createdAt,
+    });
+  }
+
+  /// Marks a chapter as read the first time it's visited, bumping the
+  /// real verses-read total and logging a Journey Activity entry.
+  /// Safe to call repeatedly (re-reading a chapter doesn't double count),
+  /// but always keeps the daily streak alive.
+  Future<void> markChapterRead({
+    required String bookId,
+    required String bookName,
+    required int chapter,
+    required int verseCount,
+  }) async {
+    if (verseCount <= 0) return;
+
+    bool isNewlyRead;
+    if (kIsWeb) {
+      final key = '${bookId}_$chapter';
+      isNewlyRead = !_webReadChapters.containsKey(key);
+      if (isNewlyRead) _webReadChapters[key] = verseCount;
+    } else {
+      final db = await database;
+      final insertedId = await db.insert(
+        'user_read_chapters',
+        {
+          'book_id': bookId,
+          'chapter': chapter,
+          'verse_count': verseCount,
+          'first_read_at': DateTime.now().millisecondsSinceEpoch,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+      isNewlyRead = insertedId != 0;
+    }
+
+    if (isNewlyRead) {
+      await _addActivityLogEntry(type: 'reading', title: 'Completed $bookName $chapter Reading');
+    }
+    await _recordDailyActivity();
+  }
+
+  Future<bool> isChapterRead(String bookId, int chapter) async {
+    if (kIsWeb) {
+      return _webReadChapters.containsKey('${bookId}_$chapter');
+    }
+    final db = await database;
+    final maps = await db.query(
+      'user_read_chapters',
+      where: 'book_id = ? AND chapter = ?',
+      whereArgs: [bookId, chapter],
+      limit: 1,
+    );
+    return maps.isNotEmpty;
+  }
+
+  Future<int> getTotalVersesRead() async {
+    if (kIsWeb) {
+      return _webReadChapters.values.fold<int>(0, (sum, v) => sum + v);
+    }
+    final db = await database;
+    final res = await db.rawQuery('SELECT COALESCE(SUM(verse_count), 0) as total FROM user_read_chapters');
+    return (res.first['total'] as int?) ?? 0;
+  }
+
+  /// Logs that a sermon note was taken, for the real Notes stat + activity feed.
+  Future<void> recordNoteActivity({required String sermonTitle}) async {
+    await _addActivityLogEntry(type: 'note', title: 'Took notes on $sermonTitle');
+    await _recordDailyActivity();
+  }
+
+  /// Logs that a prayer was shared on the Community Wall, for the activity feed.
+  /// The actual prayer count comes from Firestore (FeedFirestoreService),
+  /// this just keeps the local Journey Activity feed and streak in sync.
+  Future<void> recordPrayerActivity({String? summary}) async {
+    await _addActivityLogEntry(
+      type: 'prayer',
+      title: summary ?? 'Shared a prayer on the Community Wall',
+    );
+    await _recordDailyActivity();
+  }
+
+  Future<int> getSermonNotesCount() async {
+    if (kIsWeb) return _webSermonNotes.length;
+    final db = await database;
+    final res = await db.rawQuery('SELECT COUNT(*) as count FROM user_sermon_notes');
+    return (res.first['count'] as int?) ?? 0;
+  }
+
+  /// Consecutive-day streak of any Journey activity (reading, notes, prayers),
+  /// still counted "alive" through the end of today even before today's first
+  /// activity is logged.
+  Future<int> getCurrentStreak() async {
+    final Set<DateTime> dateSet;
+    if (kIsWeb) {
+      dateSet = _webDailyActivityDates.map(_parseDateKey).toSet();
+    } else {
+      final db = await database;
+      final maps = await db.query('user_daily_activity');
+      dateSet = maps.map((m) => _parseDateKey(m['activity_date'] as String)).toSet();
+    }
+
+    if (dateSet.isEmpty) return 0;
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    DateTime cursor = dateSet.contains(today) ? today : today.subtract(const Duration(days: 1));
+
+    int streak = 0;
+    while (dateSet.contains(cursor)) {
+      streak++;
+      cursor = cursor.subtract(const Duration(days: 1));
+    }
+    return streak;
+  }
+
+  DateTime _parseDateKey(String key) {
+    final parts = key.split('-');
+    return DateTime(int.parse(parts[0]), int.parse(parts[1]), int.parse(parts[2]));
+  }
+
+  Future<List<ActivityLogEntry>> getRecentActivity({int limit = 8}) async {
+    if (kIsWeb) {
+      return _webActivityLog.take(limit).map((m) => ActivityLogEntry.fromMap(m)).toList();
+    }
+    final db = await database;
+    final maps = await db.query(
+      'user_activity_log',
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+    return maps.map((m) => ActivityLogEntry.fromMap(m)).toList();
   }
 
   List<BibleVerse> _getWebVerses(String translation, String bookId, int chapter) {
