@@ -30,14 +30,19 @@ class UserProfile {
     required this.prayersSharedCount,
   });
 
+  // Stats start at zero here — they're no longer hardcoded. The real values
+  // (streak, verses read, notes, prayers) are loaded from local Journey
+  // tracking + Firestore by profileStatsProvider and shown on the Profile
+  // screen; this default is just what a brand-new profile looks like before
+  // that data loads.
   static const guestDefault = UserProfile(
     id: 'guest',
     name: 'Believer Guest',
     email: 'guest@gracegrid.sanctuary',
     avatarUrl: '',
-    streakDays: 4,
-    versesReadCount: 142,
-    sermonNotesCount: 12,
+    streakDays: 0,
+    versesReadCount: 0,
+    sermonNotesCount: 0,
     prayersSharedCount: 0,
   );
 
@@ -49,10 +54,10 @@ class UserProfile {
           : (user.email?.split('@').first ?? 'Grace Believer'),
       email: user.email ?? 'believer@gracegrid.sanctuary',
       avatarUrl: user.photoURL ?? '',
-      streakDays: 7,
-      versesReadCount: 310,
-      sermonNotesCount: 24,
-      prayersSharedCount: 12,
+      streakDays: 0,
+      versesReadCount: 0,
+      sermonNotesCount: 0,
+      prayersSharedCount: 0,
     );
   }
 

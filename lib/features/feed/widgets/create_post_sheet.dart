@@ -6,6 +6,8 @@ import 'package:image_picker/image_picker.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/widgets/glass_card.dart';
 import '../../../core/providers/mock_auth_provider.dart';
+import '../../../core/services/bible_database_service.dart';
+import '../../profile/providers/profile_stats_provider.dart';
 import '../providers/feed_provider.dart';
 
 class CreatePostSheet extends ConsumerStatefulWidget {
@@ -116,6 +118,13 @@ class _CreatePostSheetState extends ConsumerState<CreatePostSheet> {
           imageUrlPreset: presetUrl,
           imageCaption: _captionController.text.trim(),
         );
+
+    if (success && _selectedCategory == 'Prayer Wall') {
+      // Keeps the real Prayers/streak stats and Journey Activity feed on the
+      // Profile screen in sync (actual Prayer Wall count still comes from Firestore).
+      await BibleDatabaseService().recordPrayerActivity();
+      ref.read(journeyRefreshTickProvider.notifier).state++;
+    }
 
     if (mounted) {
       setState(() => _isUploading = false);

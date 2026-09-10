@@ -7,6 +7,7 @@ import '../../core/widgets/sanctuary_buttons.dart';
 import '../../core/providers/mock_auth_provider.dart';
 import '../auth/login_signup_modal.dart';
 import '../fellowship/fellowship_conversations_screen.dart';
+import 'providers/profile_stats_provider.dart';
 
 class ProfileJourneyHubScreen extends ConsumerWidget {
   const ProfileJourneyHubScreen({super.key});
@@ -105,6 +106,12 @@ class ProfileJourneyHubScreen extends ConsumerWidget {
     final authState = ref.watch(mockAuthNotifierProvider);
     final profile = authState.profile;
     final avatarProvider = _getAvatarProvider(profile.avatarUrl);
+    final statsAsync = ref.watch(profileStatsProvider);
+    final badgesAsync = ref.watch(badgeStatusProvider);
+    final activityAsync = ref.watch(activityFeedProvider);
+    // Real values once loaded; zero as a non-flickery placeholder while loading.
+    final stats = statsAsync.valueOrNull ?? const ProfileStats();
+    final badges = badgesAsync.valueOrNull ?? const BadgeStatus();
 
     return Scaffold(
       backgroundColor: AppTheme.background,
@@ -197,11 +204,11 @@ class ProfileJourneyHubScreen extends ConsumerWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
-                    _buildStatItem('Streak', '${profile.streakDays} Days', Icons.local_fire_department),
-                    _buildStatItem('Verses', '${profile.versesReadCount}', Icons.menu_book),
-                    _buildStatItem('Notes', '${profile.sermonNotesCount}', Icons.edit_note),
+                    _buildStatItem('Streak', '${stats.streakDays} Days', Icons.local_fire_department),
+                    _buildStatItem('Verses', '${stats.versesReadCount}', Icons.menu_book),
+                    _buildStatItem('Notes', '${stats.sermonNotesCount}', Icons.edit_note),
                     if (authState.isAuthenticated)
-                      _buildStatItem('Prayers', '${profile.prayersSharedCount}', Icons.favorite),
+                      _buildStatItem('Prayers', '${stats.prayersSharedCount}', Icons.favorite),
                   ],
                 ),
               ],
@@ -265,27 +272,29 @@ class ProfileJourneyHubScreen extends ConsumerWidget {
               Expanded(
                 child: _buildBadgeCard(
                   title: 'Vine Abider',
-                  subtitle: 'Read John 15 in WEB',
+                  subtitle: badges.vineAbiderUnlocked ? 'Read John 15' : 'Read John 15 to Unlock',
                   icon: Icons.eco,
-                  isUnlocked: true,
+                  isUnlocked: badges.vineAbiderUnlocked,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: _buildBadgeCard(
                   title: 'Shepherd Path',
-                  subtitle: 'Meditated on Psalm 23',
+                  subtitle: badges.shepherdPathUnlocked ? 'Meditated on Psalm 23' : 'Read Psalm 23 to Unlock',
                   icon: Icons.shield,
-                  isUnlocked: true,
+                  isUnlocked: badges.shepherdPathUnlocked,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: _buildBadgeCard(
                   title: 'Prayer Wall Host',
-                  subtitle: authState.isAuthenticated ? 'Shared 10+ Prayers' : 'Sign in to Unlock',
+                  subtitle: !authState.isAuthenticated
+                      ? 'Sign in to Unlock'
+                      : (badges.prayerWallHostUnlocked ? 'Shared 10+ Prayers' : '${stats.prayersSharedCount}/10 Prayers Shared'),
                   icon: Icons.favorite,
-                  isUnlocked: authState.isAuthenticated,
+                  isUnlocked: badges.prayerWallHostUnlocked,
                 ),
               ),
             ],
@@ -305,31 +314,54 @@ class ProfileJourneyHubScreen extends ConsumerWidget {
           GlassCard(
             level: GlassLevel.level1,
             padding: const EdgeInsets.all(16),
-            child: const Column(
-              children: [
-                _ActivityRow(
-                  icon: Icons.check_circle_outline,
-                  title: 'Completed John 15 Reading',
-                  time: 'Today • 20 mins ago',
-                ),
-                Divider(color: AppTheme.emeraldStrokeAlpha15),
-                _ActivityRow(
-                  icon: Icons.mic_none,
-                  title: 'Took Live Notes on Pastor Kaleb Sermon',
-                  time: 'Yesterday • 00:14:32 rec',
-                ),
-                Divider(color: AppTheme.emeraldStrokeAlpha15),
-                _ActivityRow(
-                  icon: Icons.star_border,
-                  title: 'Earned 4-Day Daily Scripture Streak',
-                  time: '3 days ago',
-                ),
-              ],
+            child: activityAsync.when(
+              loading: () => const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+              ),
+              error: (err, stack) => const Text(
+                'Could not load your activity right now.',
+                style: TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant),
+              ),
+              data: (activity) {
+                if (activity.isEmpty) {
+                  return const Text(
+                    'No activity yet — read a chapter, take a sermon note, or share a prayer to start your Journey log.',
+                    style: TextStyle(fontSize: 12, color: AppTheme.onSurfaceVariant, height: 1.4),
+                  );
+                }
+                return Column(
+                  children: [
+                    for (int i = 0; i < activity.length; i++) ...[
+                      if (i > 0) const Divider(color: AppTheme.emeraldStrokeAlpha15),
+                      _ActivityRow(
+                        icon: _iconForActivityType(activity[i].type),
+                        title: activity[i].title,
+                        time: activity[i].timeAgo,
+                      ),
+                    ],
+                  ],
+                );
+              },
             ),
           ),
         ],
       ),
     );
+  }
+
+  IconData _iconForActivityType(String type) {
+    switch (type) {
+      case 'note':
+        return Icons.mic_none;
+      case 'prayer':
+        return Icons.favorite_border;
+      case 'streak':
+        return Icons.star_border;
+      case 'reading':
+      default:
+        return Icons.check_circle_outline;
+    }
   }
 
   Widget _buildStatItem(String label, String value, IconData icon) {

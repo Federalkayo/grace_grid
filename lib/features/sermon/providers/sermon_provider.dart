@@ -5,6 +5,7 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../../../core/services/bible_database_service.dart';
+import '../../profile/providers/profile_stats_provider.dart';
 
 class SermonState {
   final List<SermonNoteItem> notes;
@@ -76,9 +77,10 @@ class SermonState {
 class SermonNotifier extends StateNotifier<SermonState> {
   final BibleDatabaseService _dbService = BibleDatabaseService();
   final AudioRecorder _audioRecorder = AudioRecorder();
+  final Ref _ref;
   Timer? _recordingTimer;
 
-  SermonNotifier() : super(const SermonState()) {
+  SermonNotifier(this._ref) : super(const SermonState()) {
     _loadNotes();
   }
 
@@ -191,6 +193,8 @@ class SermonNotifier extends StateNotifier<SermonState> {
     );
 
     await _dbService.addSermonNote(newItem);
+    await _dbService.recordNoteActivity(sermonTitle: newItem.sermonTitle);
+    _ref.read(journeyRefreshTickProvider.notifier).state++;
     await _loadNotes();
   }
 
@@ -217,5 +221,5 @@ class SermonNotifier extends StateNotifier<SermonState> {
 }
 
 final sermonProvider = StateNotifierProvider<SermonNotifier, SermonState>((ref) {
-  return SermonNotifier();
+  return SermonNotifier(ref);
 });

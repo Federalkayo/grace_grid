@@ -9,17 +9,20 @@ import '../models/feed_post_model.dart';
 class SanctuaryStoryViewerModal extends StatefulWidget {
   final List<SanctuaryStory> stories;
   final int initialIndex;
+  final ValueChanged<SanctuaryStory>? onStoryViewed;
 
   const SanctuaryStoryViewerModal({
     super.key,
     required this.stories,
     this.initialIndex = 0,
+    this.onStoryViewed,
   });
 
   static Future<void> show(
     BuildContext context, {
     required List<SanctuaryStory> stories,
     int initialIndex = 0,
+    ValueChanged<SanctuaryStory>? onStoryViewed,
   }) {
     return showDialog(
       context: context,
@@ -27,6 +30,7 @@ class SanctuaryStoryViewerModal extends StatefulWidget {
       builder: (context) => SanctuaryStoryViewerModal(
         stories: stories,
         initialIndex: initialIndex,
+        onStoryViewed: onStoryViewed,
       ),
     );
   }
@@ -54,6 +58,22 @@ class _SanctuaryStoryViewerModalState extends State<SanctuaryStoryViewerModal>
       });
 
     _progressController.forward();
+    _markCurrentViewed();
+  }
+
+  void _markCurrentViewed() {
+    if (_currentIndex >= widget.stories.length) return;
+    final story = widget.stories[_currentIndex];
+    // Defer to after this frame's build finishes. Calling this straight
+    // from initState() modifies feedProvider's state while THIS widget
+    // is still mid-build, which is exactly what Riverpod's "Tried to
+    // modify a provider while the widget tree was building" guards
+    // against — addPostFrameCallback runs it right after, once it's
+    // safe.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onStoryViewed?.call(story);
+    });
   }
 
   @override
@@ -69,6 +89,7 @@ class _SanctuaryStoryViewerModalState extends State<SanctuaryStoryViewerModal>
         _progressController.reset();
         _progressController.forward();
       });
+      _markCurrentViewed();
     } else {
       Navigator.of(context, rootNavigator: true).pop();
     }
@@ -81,6 +102,7 @@ class _SanctuaryStoryViewerModalState extends State<SanctuaryStoryViewerModal>
         _progressController.reset();
         _progressController.forward();
       });
+      _markCurrentViewed();
     }
   }
 

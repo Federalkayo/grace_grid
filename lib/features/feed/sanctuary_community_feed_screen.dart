@@ -11,12 +11,14 @@ import '../auth/login_signup_modal.dart';
 import '../fellowship/fellowship_conversations_screen.dart';
 import '../fellowship/fellowship_chat_screen.dart';
 import '../../core/providers/agora_chat_provider.dart';
+import 'feed_search_screen.dart';
 import 'models/feed_post_model.dart';
 import 'providers/feed_provider.dart';
 import 'widgets/create_post_sheet.dart';
 import 'widgets/create_story_sheet.dart';
 import 'widgets/post_comments_sheet.dart';
 import 'widgets/sanctuary_story_viewer_modal.dart';
+import 'widgets/story_segmented_ring.dart';
 
 class SanctuaryCommunityFeedScreen extends ConsumerStatefulWidget {
   const SanctuaryCommunityFeedScreen({super.key});
@@ -188,6 +190,7 @@ class _SanctuaryCommunityFeedScreenState extends ConsumerState<SanctuaryCommunit
     final authState = ref.watch(mockAuthNotifierProvider);
     final userName = authState.profile.name;
     final userAvatarUrl = authState.profile.avatarUrl.isNotEmpty ? authState.profile.avatarUrl : null;
+    final currentUserId = authState.profile.id.isNotEmpty ? authState.profile.id : 'user_me';
 
     final filteredPosts = feedState.selectedCategory == 'All'
         ? feedState.posts
@@ -239,7 +242,12 @@ class _SanctuaryCommunityFeedScreenState extends ConsumerState<SanctuaryCommunit
           ),
           IconButton(
             icon: const Icon(Icons.search, color: AppTheme.onSurfaceVariant),
-            onPressed: () {},
+            tooltip: 'Search the feed',
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const FeedSearchScreen()),
+              );
+            },
           ),
           IconButton(
             icon: const Icon(Icons.notifications_none, color: AppTheme.onSurfaceVariant),
@@ -280,18 +288,22 @@ SizedBox(
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: feedState.stories.length + 1,
+                itemCount: feedState.groupedActiveStories.length + 1,
                 itemBuilder: (context, index) {
                   final isUser = index == 0;
+                  // Group stories by author so a person who posted 2
+                  // stories gets ONE bubble with 2 progress segments,
+                  // and tapping it only ever plays their own stories —
+                  // never rolls into the next person's story bubble.
+                  final StoryGroup? group = isUser ? null : feedState.groupedActiveStories[index - 1];
                   final SanctuaryStory story = isUser
                       ? SanctuaryStory(
                           id: 'my-status',
                           userName: 'Your Status',
                           userAvatar: userAvatarUrl,
                           roleTag: 'Believer',
-                          hasUnread: false,
                         )
-                      : feedState.stories[index - 1];
+                      : group!.stories.last;
 
                   return Padding(
                     padding: const EdgeInsets.only(right: 14),
@@ -311,8 +323,11 @@ SizedBox(
                         } else {
                           SanctuaryStoryViewerModal.show(
                             context,
-                            stories: feedState.stories,
-                            initialIndex: index - 1,
+                            stories: group!.stories,
+                            initialIndex: 0,
+                            onStoryViewed: (viewedStory) {
+                              ref.read(feedProvider.notifier).markStoryViewed(viewedStory.id);
+                            },
                           );
                         }
                       },
@@ -320,35 +335,30 @@ SizedBox(
                         children: [
                           Stack(
                             children: [
-                              Container(
-                                padding: const EdgeInsets.all(2.5),
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: story.hasUnread ? AppTheme.primaryContainer : AppTheme.emeraldStrokeAlpha15,
-                                    width: 2,
+                              if (isUser)
+                                Container(
+                                  padding: const EdgeInsets.all(2.5),
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: AppTheme.emeraldStrokeAlpha15, width: 2),
                                   ),
+                                  child: _StoryAvatar(story: story, isUser: isUser),
+                                )
+                              else
+                                // One ring segment per story this author has
+                                // posted, each colored per-viewer: bright for
+                                // stories THIS user hasn't opened yet, dim for
+                                // ones they have — independent of whether any
+                                // other viewer has opened them.
+                                StorySegmentedRing(
+                                  size: 62,
+                                  strokeWidth: 2.5,
+                                  unreadColor: AppTheme.primaryContainer,
+                                  readColor: AppTheme.emeraldStrokeAlpha15,
+                                  unreadFlags: group!.unreadFlagsFor(currentUserId),
+                                  child: _StoryAvatar(story: story, isUser: isUser),
                                 ),
-                                child: Builder(
-                                  builder: (context) {
-                                    final avatarImg = getAvatarImageProvider(story.userAvatar);
-                                    return CircleAvatar(
-                                      radius: 26,
-                                      backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
-                                      backgroundImage: avatarImg,
-                                      child: avatarImg == null
-                                          ? (isUser
-                                              ? const Icon(Icons.add, color: AppTheme.primaryContainer)
-                                              : Text(
-                                                  story.userName.isNotEmpty ? story.userName[0].toUpperCase() : 'U',
-                                                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryContainer),
-                                                ))
-                                          : null,
-                                    );
-                                  },
-                                ),
-                              ),
-                              if (story.isLive)
+                              if (!isUser && group!.isLive)
                                 Positioned(
                                   bottom: 0,
                                   right: 0,
@@ -769,6 +779,33 @@ SizedBox(
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The circular avatar shown inside a story bubble, shared by both the
+/// "Your Status" placeholder and every real author's ring.
+class _StoryAvatar extends StatelessWidget {
+  final SanctuaryStory story;
+  final bool isUser;
+
+  const _StoryAvatar({required this.story, required this.isUser});
+
+  @override
+  Widget build(BuildContext context) {
+    final avatarImg = getAvatarImageProvider(story.userAvatar);
+    return CircleAvatar(
+      radius: 26,
+      backgroundColor: AppTheme.primaryContainer.withValues(alpha: 0.2),
+      backgroundImage: avatarImg,
+      child: avatarImg == null
+          ? (isUser
+              ? const Icon(Icons.add, color: AppTheme.primaryContainer)
+              : Text(
+                  story.userName.isNotEmpty ? story.userName[0].toUpperCase() : 'U',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryContainer),
+                ))
+          : null,
     );
   }
 }
