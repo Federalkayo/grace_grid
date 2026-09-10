@@ -63,28 +63,34 @@ class ChatFirestoreService {
 
   CollectionReference<Map<String, dynamic>>? get _chatsRef => _firestore?.collection('chats');
 
-  /// Stream active conversations from Firestore strictly for current user UID
+  /// Stream active conversations from Firestore strictly for current user UID.
+  ///
+  /// IMPORTANT: this must filter with `.where('participants', arrayContains: cleanId)`.
+  /// Our firestore.rules require `request.auth.uid in resource.data.participants`
+  /// for reads on /chats/{chatId}. Firestore can only validate that condition for a
+  /// *list* query (as opposed to a single-doc get) if the query itself is filtered
+  /// the same way. Listening to the whole collection and filtering client-side (as
+  /// this used to do) gets rejected by the rules engine with permission-denied for
+  /// the entire query — so the stream silently never emits. On a device that already
+  /// has a local cache, that's invisible (you still see the old cached list). On a
+  /// fresh install / new device with no cache, it shows up as "my conversations are
+  /// gone", because nothing was ever able to load from Firestore in the first place.
   Stream<List<Map<String, dynamic>>> getConversationsStream(String currentUserId) {
     final ref = _chatsRef;
     final cleanId = currentUserId.trim();
     if (ref == null || cleanId.isEmpty) return const Stream.empty();
 
-    return ref.snapshots().map((snapshot) {
+    return ref
+        .where('participants', arrayContains: cleanId)
+        .snapshots()
+        .map((snapshot) {
       final list = <Map<String, dynamic>>[];
       for (final doc in snapshot.docs) {
         final data = doc.data();
-        final participants = List<String>.from(data['participants'] ?? [])
-            .map((p) => p.trim())
-            .where((p) => p.isNotEmpty)
-            .toList();
-
-        // Exact match on UID or fallback ID
-        if (participants.contains(cleanId)) {
-          list.add({
-            'id': doc.id,
-            ...data,
-          });
-        }
+        list.add({
+          'id': doc.id,
+          ...data,
+        });
       }
       list.sort((a, b) {
         final aTime = (a['updatedAt'] as Timestamp?)?.toDate() ?? DateTime.now();
@@ -92,6 +98,8 @@ class ChatFirestoreService {
         return bTime.compareTo(aTime);
       });
       return list;
+    }).handleError((e) {
+      debugPrint('Firestore getConversationsStream error: $e');
     });
   }
 
@@ -135,6 +143,9 @@ class ChatFirestoreService {
           isRead: data['isRead'] ?? false,
           reactions: Map<String, String>.from(data['reactions'] is Map ? data['reactions'] : {}),
           isForwarded: data['isForwarded'] ?? false,
+          replyToId: (data['replyToId'] as String?)?.isNotEmpty == true ? data['replyToId'] as String : null,
+          replyToSenderName: data['replyToSenderName'] as String?,
+          replyToContent: data['replyToContent'] as String?,
         );
       }).toList();
     });
@@ -151,6 +162,12 @@ class ChatFirestoreService {
     String recipientAvatar = '',
     String? messageId,
     bool isForwarded = false,
+    // Pass all three to send this message as a reply. A snapshot of the
+    // original is stored inline (not a live reference), so the quoted
+    // preview keeps working even if the original message is later deleted.
+    String? replyToId,
+    String? replyToSenderName,
+    String? replyToContent,
   }) async {
     try {
       final db = _firestore;
@@ -176,6 +193,11 @@ class ChatFirestoreService {
         'isRead': false,
         'reactions': <String, String>{},
         'isForwarded': isForwarded,
+        if (replyToId != null && replyToId.isNotEmpty) ...{
+          'replyToId': replyToId,
+          'replyToSenderName': replyToSenderName ?? '',
+          'replyToContent': replyToContent ?? '',
+        },
       });
 
       // Update parent chat doc keying partnerNames and partnerAvatars by UID
@@ -195,12 +217,63 @@ class ChatFirestoreService {
           senderId: senderName,
           recipientId: recipientName,
         },
+        // Per-user unread counters, keyed by UID, live on the chat doc itself.
+        // Only the recipient's counter goes up — this is what the conversations
+        // list badge (WhatsApp-style unread number) reads from.
+        'unreadCounts': {
+          recipientId: FieldValue.increment(1),
+        },
       }, SetOptions(merge: true));
 
       await batch.commit();
     } catch (e) {
       debugPrint('Firestore sendMessage error: $e');
     }
+  }
+
+  /// Broadcast this user's typing state on the chat doc so the *other*
+  /// participant can see it in real time. Keyed by UID (like unreadCounts),
+  /// so each side only ever reads the other person's key — never its own.
+  Future<void> setTyping({
+    required String chatId,
+    required String userId,
+    required bool isTyping,
+  }) async {
+    try {
+      final ref = _chatsRef;
+      if (ref == null) return;
+      final chatDocRef = ref.doc(chatId);
+      // Same reasoning as markAsRead: don't let this create a doc without a
+      // 'participants' field before the first real message exists.
+      final snap = await chatDocRef.get();
+      if (!snap.exists) return;
+      await chatDocRef.set({
+        'typing': {userId.trim(): isTyping},
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('Firestore setTyping error: $e');
+    }
+  }
+
+  /// Stream whether [partnerId] is currently typing in this chat. Reads only
+  /// the partner's key on purpose — this is what keeps your own typing from
+  /// ever being able to show up as "they're typing" on your own screen.
+  Stream<bool> getTypingStream({
+    required String chatId,
+    required String partnerId,
+  }) {
+    final ref = _chatsRef;
+    final cleanPartner = partnerId.trim();
+    if (ref == null || cleanPartner.isEmpty) return const Stream.empty();
+
+    return ref.doc(chatId).snapshots().map((snap) {
+      final data = snap.data();
+      if (data == null) return false;
+      final typing = Map<String, dynamic>.from(data['typing'] ?? {});
+      return typing[cleanPartner] == true;
+    }).handleError((e) {
+      debugPrint('Firestore getTypingStream error: $e');
+    });
   }
 
   /// Toggle reaction on a message in Firestore
@@ -254,24 +327,38 @@ class ChatFirestoreService {
       final ref = _chatsRef;
       if (ref == null) return;
 
-      final messagesQuery = await ref.doc(chatId).collection('messages').where('isRead', isEqualTo: false).get();
+      final chatDocRef = ref.doc(chatId);
+      final chatDocSnap = await chatDocRef.get();
+      // If no one has sent a message in this chat yet, the doc doesn't exist —
+      // skip entirely rather than let the merge below create a doc without a
+      // 'participants' field, which the Firestore create rule would reject.
+      if (!chatDocSnap.exists) return;
+
+      final messagesQuery = await chatDocRef.collection('messages').where('isRead', isEqualTo: false).get();
       final cleanUser = currentUserId.trim();
 
       final batch = _firestore?.batch();
       if (batch == null) return;
 
-      int updatedCount = 0;
       for (final doc in messagesQuery.docs) {
         final senderId = (doc.data()['senderId'] ?? '').toString().trim();
         if (senderId != cleanUser) {
           batch.update(doc.reference, {'isRead': true});
-          updatedCount++;
         }
       }
 
-      if (updatedCount > 0) {
-        await batch.commit();
-      }
+      // Always reset this reader's unread counter, even if there were no
+      // unread messages left to mark (e.g. they were already all read but the
+      // counter drifted) — this is the field the conversations list badge uses.
+      batch.set(
+        chatDocRef,
+        {
+          'unreadCounts': {cleanUser: 0},
+        },
+        SetOptions(merge: true),
+      );
+
+      await batch.commit();
     } catch (e) {
       debugPrint('Firestore markAsRead error: $e');
     }

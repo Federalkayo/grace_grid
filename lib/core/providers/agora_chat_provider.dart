@@ -73,7 +73,6 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
   final ChatFirestoreService _firestoreService;
   final Ref ref;
   StreamSubscription<AgoraChatMessageData>? _msgSub;
-  StreamSubscription<AgoraTypingEvent>? _typingSub;
   StreamSubscription<List<Map<String, dynamic>>>? _firestoreSub;
 
   ConversationsListNotifier(this._service, this._firestoreService, this.ref) : super([]) {
@@ -163,6 +162,15 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
 
         final avatarUrl = (avatars[partnerId] ?? '').toString();
 
+        final unreadCounts = Map<String, dynamic>.from(data['unreadCounts'] ?? {});
+        final unreadCount = (unreadCounts[currentId] as num?)?.toInt() ?? 0;
+
+        // Only ever read the *partner's* key here — this is what keeps your
+        // own typing from being able to show as "they're typing" in your
+        // own conversation list.
+        final typingMap = Map<String, dynamic>.from(data['typing'] ?? {});
+        final partnerIsTyping = typingMap[partnerId] == true;
+
         final updatedAtVal = data['updatedAt'];
         String timeAgoStr = 'Just now';
         if (updatedAtVal != null) {
@@ -181,8 +189,9 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
           avatarUrl: avatarUrl,
           lastMessage: (data['lastMessage'] ?? '').toString(),
           timeAgo: timeAgoStr,
-          unreadCount: 0,
+          unreadCount: unreadCount,
           isOnline: true,
+          isTyping: partnerIsTyping,
         ));
       }
 
@@ -199,10 +208,6 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
       if (msg.conversationId != null) {
         _updateWithIncomingMessage(msg.conversationId!, msg.senderName, msg.content, msg.formattedTime);
       }
-    });
-
-    _typingSub = _service.typingEvents.listen((event) {
-      updateTypingStatus(event.conversationId, event.isTyping);
     });
   }
 
@@ -261,15 +266,6 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
     _updateWithIncomingMessage(partnerName, partnerName, content, time, incrementUnread: incrementUnread);
   }
 
-  void updateTypingStatus(String conversationId, bool isTyping) {
-    state = state.map((item) {
-      if (item.id.toLowerCase() == conversationId.toLowerCase() || item.partnerName.toLowerCase() == conversationId.toLowerCase()) {
-        return item.copyWith(isTyping: isTyping);
-      }
-      return item;
-    }).toList();
-  }
-
   void markAsRead(String conversationId) {
     state = state.map((item) {
       if (item.id.toLowerCase() == conversationId.toLowerCase() || item.partnerName.toLowerCase() == conversationId.toLowerCase()) {
@@ -314,7 +310,6 @@ class ConversationsListNotifier extends StateNotifier<List<ConversationItem>> {
   @override
   void dispose() {
     _msgSub?.cancel();
-    _typingSub?.cancel();
     _firestoreSub?.cancel();
     super.dispose();
   }
@@ -333,19 +328,26 @@ final conversationsListProvider =
 class FellowshipChatState {
   final List<AgoraChatMessageData> messages;
   final bool isPartnerTyping;
+  // The message currently staged for reply via swipe — shown as a preview
+  // above the composer, cleared once the reply is sent or dismissed.
+  final AgoraChatMessageData? replyingTo;
 
   const FellowshipChatState({
     required this.messages,
     this.isPartnerTyping = false,
+    this.replyingTo,
   });
 
   FellowshipChatState copyWith({
     List<AgoraChatMessageData>? messages,
     bool? isPartnerTyping,
+    AgoraChatMessageData? replyingTo,
+    bool clearReplyingTo = false,
   }) {
     return FellowshipChatState(
       messages: messages ?? this.messages,
       isPartnerTyping: isPartnerTyping ?? this.isPartnerTyping,
+      replyingTo: clearReplyingTo ? null : (replyingTo ?? this.replyingTo),
     );
   }
 }
@@ -356,9 +358,9 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
   final String partnerId;
   final Ref ref;
   StreamSubscription<AgoraChatMessageData>? _msgSub;
-  StreamSubscription<AgoraTypingEvent>? _typingSub;
   StreamSubscription<AgoraReadAckEvent>? _readSub;
   StreamSubscription<List<AgoraChatMessageData>>? _firestoreMsgSub;
+  StreamSubscription<bool>? _firestoreTypingSub;
 
   FellowshipChatNotifier(this._service, this._firestoreService, this.partnerId, this.ref)
       : super(const FellowshipChatState(messages: [])) {
@@ -409,10 +411,10 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
       });
     });
 
-    _typingSub = _service.typingEvents.listen((event) {
-      if (event.conversationId == partnerId || event.userId == partnerId) {
-        state = state.copyWith(isPartnerTyping: event.isTyping);
-      }
+    _firestoreTypingSub = _firestoreService
+        .getTypingStream(chatId: chatId, partnerId: partnerId)
+        .listen((partnerIsTyping) {
+      state = state.copyWith(isPartnerTyping: partnerIsTyping);
     });
 
     _readSub = _service.readAckEvents.listen((event) {
@@ -442,7 +444,19 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
   }
 
   Future<void> sendTypingSignal(bool isTyping) async {
-    await _service.sendTypingSignal(partnerId, isTyping);
+    final authProfile = ref.read(mockAuthNotifierProvider).profile;
+    final chatId = ChatFirestoreService.getChatId(authProfile.id, partnerId);
+    await _firestoreService.setTyping(chatId: chatId, userId: authProfile.id, isTyping: isTyping);
+  }
+
+  /// Stage a message to reply to — shown as a preview above the composer.
+  void setReplyTo(AgoraChatMessageData message) {
+    state = state.copyWith(replyingTo: message);
+  }
+
+  /// Dismiss the reply preview without sending.
+  void clearReplyTo() {
+    state = state.copyWith(clearReplyingTo: true);
   }
 
   Future<void> sendMessage(String text, {String? senderId, String senderName = 'You', String recipientName = '', bool isForwarded = false}) async {
@@ -453,6 +467,13 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
     final activeSenderId = senderId ?? authProfile.id;
     final activeSenderName = senderName != 'You' ? senderName : authProfile.name;
     final msgId = 'msg_${DateTime.now().millisecondsSinceEpoch}';
+
+    // Capture and clear the staged reply up front, WhatsApp-style: the
+    // preview disappears the instant you hit send, not after the round trip.
+    final replyingTo = state.replyingTo;
+    if (replyingTo != null) {
+      state = state.copyWith(clearReplyingTo: true);
+    }
 
     final sentData = await _service.sendDirectMessage(
       recipientUserId: partnerId,
@@ -471,12 +492,24 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
       senderAvatar: authProfile.avatarUrl,
       messageId: msgId,
       isForwarded: isForwarded,
+      replyToId: replyingTo?.id,
+      replyToSenderName: replyingTo?.isMe == true ? 'You' : replyingTo?.senderName,
+      replyToContent: replyingTo?.content,
     );
 
     final exists = state.messages.any((m) => m.id == msgId || m.id == sentData.id);
     if (!exists) {
       state = state.copyWith(
-        messages: [...state.messages, sentData.copyWith(id: msgId, isForwarded: isForwarded)],
+        messages: [
+          ...state.messages,
+          sentData.copyWith(
+            id: msgId,
+            isForwarded: isForwarded,
+            replyToId: replyingTo?.id,
+            replyToSenderName: replyingTo?.isMe == true ? 'You' : replyingTo?.senderName,
+            replyToContent: replyingTo?.content,
+          ),
+        ],
       );
       ChatLocalCacheService().saveMessages(partnerId, state.messages);
     }
@@ -536,7 +569,7 @@ class FellowshipChatNotifier extends StateNotifier<FellowshipChatState> {
   void dispose() {
     sendTypingSignal(false);
     _msgSub?.cancel();
-    _typingSub?.cancel();
+    _firestoreTypingSub?.cancel();
     _readSub?.cancel();
     _firestoreMsgSub?.cancel();
     super.dispose();
