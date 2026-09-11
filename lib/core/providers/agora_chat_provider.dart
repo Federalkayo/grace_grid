@@ -322,6 +322,16 @@ final conversationsListProvider =
   return ConversationsListNotifier(service, firestoreService, ref);
 });
 
+/// Total unread DM count across every conversation, for the small badge on
+/// the Fellowship Messages icon (Feed & Profile app bars). Just sums
+/// [ConversationItem.unreadCount], which already stays live via
+/// [ConversationsListNotifier]'s Firestore subscription — nothing new to
+/// fetch here.
+final totalUnreadMessagesProvider = Provider<int>((ref) {
+  final conversations = ref.watch(conversationsListProvider);
+  return conversations.fold<int>(0, (sum, c) => sum + c.unreadCount);
+});
+
 // -----------------------------------------------------------------------------
 // Fellowship 1-on-1 Chat Notifier & Provider
 // -----------------------------------------------------------------------------

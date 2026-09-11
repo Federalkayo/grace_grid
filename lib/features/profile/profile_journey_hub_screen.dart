@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/widgets/glass_card.dart';
 import '../../core/widgets/sanctuary_buttons.dart';
+import '../../core/widgets/messages_icon_button.dart';
 import '../../core/providers/mock_auth_provider.dart';
 import '../auth/login_signup_modal.dart';
 import '../fellowship/fellowship_conversations_screen.dart';
@@ -127,9 +128,7 @@ class ProfileJourneyHubScreen extends ConsumerWidget {
           ),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.forum_outlined, color: AppTheme.primaryContainer),
-            tooltip: 'Fellowship Messages',
+          MessagesIconButton(
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
