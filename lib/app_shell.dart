@@ -6,6 +6,7 @@ import 'core/theme/app_theme.dart';
 import 'core/providers/mock_auth_provider.dart';
 import 'core/providers/navigation_provider.dart';
 import 'core/services/call_signaling_service.dart';
+import 'core/services/ringtone_service.dart';
 import 'features/auth/login_signup_modal.dart';
 import 'features/bible/bible_reader_screen.dart';
 import 'features/sermon/sermon_studio_screen.dart';
@@ -39,6 +40,7 @@ class _AppShellState extends ConsumerState<AppShell> {
   @override
   void dispose() {
     _callSubscription?.cancel();
+    RingtoneService.instance.stop();
     super.dispose();
   }
 
@@ -67,6 +69,7 @@ class _AppShellState extends ConsumerState<AppShell> {
       } else {
         if (_activeRingingChatId != null) {
           _activeRingingChatId = null;
+          RingtoneService.instance.stop();
           if (_incomingDialogContext != null && mounted) {
             Navigator.of(_incomingDialogContext!).pop();
             _incomingDialogContext = null;
@@ -88,6 +91,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     if (!mounted) return;
 
     final isVideo = callType == 'video';
+    await RingtoneService.instance.playIncoming();
 
     showDialog(
       context: context,
@@ -155,6 +159,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                       onPressed: () async {
                         _incomingDialogContext = null;
                         _activeRingingChatId = null;
+                        RingtoneService.instance.stop();
                         Navigator.of(dialogContext).pop();
                         await CallSignalingService().updateStatus(chatId, CallStatus.declined);
                       },
@@ -169,6 +174,7 @@ class _AppShellState extends ConsumerState<AppShell> {
                       onPressed: () async {
                         _incomingDialogContext = null;
                         _activeRingingChatId = null;
+                        RingtoneService.instance.stop();
                         Navigator.of(dialogContext).pop();
                         await CallSignalingService().updateStatus(chatId, CallStatus.accepted);
                         if (mounted) {
@@ -205,6 +211,9 @@ class _AppShellState extends ConsumerState<AppShell> {
       },
     ).then((_) {
       _incomingDialogContext = null;
+      // Safety net: covers any dismissal path we didn't explicitly stop
+      // the ringtone on above (e.g. hardware back button). Idempotent.
+      RingtoneService.instance.stop();
     });
   }
 

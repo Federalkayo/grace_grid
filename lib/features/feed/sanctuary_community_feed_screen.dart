@@ -7,6 +7,8 @@ import '../../core/widgets/glass_card.dart';
 import '../../core/widgets/sanctuary_buttons.dart';
 import '../../core/widgets/sanctuary_chips_badges.dart';
 import '../../core/widgets/messages_icon_button.dart';
+import '../notifications/notifications_icon_button.dart';
+import '../notifications/notifications_screen.dart';
 import '../../core/providers/mock_auth_provider.dart';
 import '../auth/login_signup_modal.dart';
 import '../fellowship/fellowship_conversations_screen.dart';
@@ -248,11 +250,14 @@ class _SanctuaryCommunityFeedScreenState extends ConsumerState<SanctuaryCommunit
               );
             },
           ),
-          IconButton(
-            icon: const Icon(Icons.notifications_none, color: AppTheme.onSurfaceVariant),
+          NotificationsIconButton(
             onPressed: () => _handleProtectedAction(
               actionTitle: 'view notifications',
-              onAuthenticated: () {},
+              onAuthenticated: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (context) => const NotificationsScreen()),
+                );
+              },
             ),
           ),
         ],

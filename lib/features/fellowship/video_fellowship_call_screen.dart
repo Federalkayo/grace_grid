@@ -12,6 +12,7 @@ import '../../core/providers/mock_auth_provider.dart';
 import '../../core/services/agora_token_service.dart';
 import '../../core/services/chat_firestore_service.dart';
 import '../../core/services/call_signaling_service.dart';
+import '../../core/services/ringtone_service.dart';
 
 class VideoFellowshipCallScreen extends ConsumerStatefulWidget {
   final String partnerId;
@@ -61,6 +62,7 @@ class _VideoFellowshipCallScreenState extends ConsumerState<VideoFellowshipCallS
         calleeId: widget.partnerId,
         callType: 'video',
       );
+      await RingtoneService.instance.playOutgoing();
     }
 
     try {
@@ -110,10 +112,12 @@ class _VideoFellowshipCallScreenState extends ConsumerState<VideoFellowshipCallS
         setState(() {});
       }
 
-      // Watch for the other party declining/ending
+      // Watch for the other party accepting/declining/ending
       _signalingSubscription = CallSignalingService().watchCall(chatId).listen((snap) {
         final status = snap.data()?['status'];
-        if (status == 'declined' || status == 'ended') {
+        if (status == 'accepted') {
+          RingtoneService.instance.stop();
+        } else if (status == 'declined' || status == 'ended') {
           _endCall();
         }
       });
@@ -128,6 +132,7 @@ class _VideoFellowshipCallScreenState extends ConsumerState<VideoFellowshipCallS
   Future<void> _endCall() async {
     if (_isEnding) return;
     _isEnding = true;
+    RingtoneService.instance.stop();
     _signalingSubscription?.cancel();
     if (_chatId != null) {
       await CallSignalingService().endCall(_chatId!);
@@ -142,6 +147,7 @@ class _VideoFellowshipCallScreenState extends ConsumerState<VideoFellowshipCallS
 
   @override
   void dispose() {
+    RingtoneService.instance.stop();
     _signalingSubscription?.cancel();
     _engine?.leaveChannel();
     _engine?.release();

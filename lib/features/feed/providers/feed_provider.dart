@@ -157,10 +157,15 @@ class FeedNotifier extends StateNotifier<FeedState> {
         }
 
         // Fire & forget firestore update
+        final actorProfile = _ref.read(authNotifierProvider).profile;
         _firestoreService.toggleAmen(
           postId: postId,
           userId: effectiveUserId,
           isCurrentlyLiked: post.hasSaidAmen,
+          postAuthorId: post.authorId,
+          actorName: actorProfile.name,
+          actorAvatar: actorProfile.avatarUrl,
+          postSnippet: post.body,
         );
 
         return post.copyWith(
@@ -211,7 +216,26 @@ class FeedNotifier extends StateNotifier<FeedState> {
     state = state.copyWith(posts: updatedPosts);
 
     // Sync to Firestore
-    await _firestoreService.addComment(postId: postId, comment: newComment);
+    final targetPost = state.posts.firstWhere(
+      (p) => p.id == postId,
+      orElse: () => FeedPost(
+        id: postId,
+        authorName: '',
+        authorTitle: '',
+        authorId: '',
+        authorHandle: '',
+        timeAgo: '',
+        createdAt: DateTime.now(),
+        category: '',
+        body: '',
+      ),
+    );
+    await _firestoreService.addComment(
+      postId: postId,
+      comment: newComment,
+      postAuthorId: targetPost.authorId,
+      postSnippet: targetPost.body,
+    );
   }
 
   /// Toggle like on a comment

@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../../features/feed/models/feed_post_model.dart';
+import '../../features/notifications/models/app_notification_model.dart';
 
 class FeedFirestoreService {
   FirebaseFirestore? _firestoreInstance;
@@ -64,11 +65,19 @@ class FeedFirestoreService {
     }
   }
 
-  /// Toggle Amen (like) on a post
+  /// Toggle Amen (like) on a post. When this is a new Amen (not an
+  /// unlike) and it isn't the post author liking their own post, also
+  /// drops a real notification for [postAuthorId] — pass it (plus the
+  /// liker's display info) to get that; omit it and this behaves exactly
+  /// as before with no notification written.
   Future<void> toggleAmen({
     required String postId,
     required String userId,
     required bool isCurrentlyLiked,
+    String? postAuthorId,
+    String? actorName,
+    String? actorAvatar,
+    String? postSnippet,
   }) async {
     try {
       final ref = _postsRef;
@@ -84,6 +93,17 @@ class FeedFirestoreService {
           'amenCount': FieldValue.increment(1),
           'likedUserIds': FieldValue.arrayUnion([userId]),
         });
+        if (postAuthorId != null && actorName != null) {
+          await _addNotification(
+            recipientId: postAuthorId,
+            actorId: userId,
+            actorName: actorName,
+            actorAvatar: actorAvatar,
+            type: 'amen',
+            postId: postId,
+            postSnippet: postSnippet,
+          );
+        }
       }
     } catch (e) {
       debugPrint('Firestore toggleAmen error: $e');
@@ -107,10 +127,14 @@ class FeedFirestoreService {
     });
   }
 
-  /// Add a comment to a post
+  /// Add a comment to a post. Pass [postAuthorId] to also drop a real
+  /// notification for the post's author (skipped automatically when
+  /// they're commenting on their own post).
   Future<void> addComment({
     required String postId,
     required PostComment comment,
+    String? postAuthorId,
+    String? postSnippet,
   }) async {
     try {
       final db = _firestore;
@@ -134,6 +158,18 @@ class FeedFirestoreService {
       });
 
       await batch.commit();
+
+      if (postAuthorId != null) {
+        await _addNotification(
+          recipientId: postAuthorId,
+          actorId: comment.authorId,
+          actorName: comment.authorName,
+          actorAvatar: comment.authorAvatar,
+          type: 'comment',
+          postId: postId,
+          postSnippet: postSnippet,
+        );
+      }
     } catch (e) {
       debugPrint('Firestore addComment error: $e');
     }
@@ -215,6 +251,77 @@ class FeedFirestoreService {
       });
     } catch (e) {
       debugPrint('Firestore markStoryViewed error: $e');
+    }
+  }
+
+  // --- Notifications (bell icon: Amens & comments on your posts) ---
+
+  CollectionReference<Map<String, dynamic>>? _notificationsRef(String userId) =>
+      _firestore?.collection('notifications').doc(userId).collection('items');
+
+  Future<void> _addNotification({
+    required String recipientId,
+    required String actorId,
+    required String actorName,
+    String? actorAvatar,
+    required String type,
+    required String postId,
+    String? postSnippet,
+  }) async {
+    try {
+      // Never notify someone about their own Amen/comment on their own post.
+      if (recipientId.isEmpty || recipientId == actorId) return;
+      final ref = _notificationsRef(recipientId);
+      if (ref == null) return;
+      final trimmedSnippet =
+          (postSnippet != null && postSnippet.length > 120) ? '${postSnippet.substring(0, 120)}…' : postSnippet;
+      await ref.add(AppNotification(
+        id: '',
+        type: type,
+        actorId: actorId,
+        actorName: actorName,
+        actorAvatar: actorAvatar,
+        postId: postId,
+        postSnippet: trimmedSnippet,
+        createdAt: DateTime.now(),
+      ).toMap());
+    } catch (e) {
+      debugPrint('Firestore _addNotification error: $e');
+    }
+  }
+
+  /// Stream this user's notifications, newest first, for the
+  /// Notifications screen and the bell-icon unread badge.
+  Stream<List<AppNotification>> getNotificationsStream(String userId) {
+    final ref = _notificationsRef(userId);
+    if (ref == null || userId.isEmpty) return const Stream.empty();
+    return ref.orderBy('createdAt', descending: true).limit(50).snapshots().map((snapshot) {
+      return snapshot.docs.map((doc) => AppNotification.fromMap(doc.data(), doc.id)).toList();
+    });
+  }
+
+  Future<void> markNotificationRead(String userId, String notificationId) async {
+    try {
+      final ref = _notificationsRef(userId);
+      if (ref == null) return;
+      await ref.doc(notificationId).update({'read': true});
+    } catch (e) {
+      debugPrint('Firestore markNotificationRead error: $e');
+    }
+  }
+
+  Future<void> markAllNotificationsRead(String userId, List<String> unreadIds) async {
+    try {
+      final db = _firestore;
+      final ref = _notificationsRef(userId);
+      if (db == null || ref == null || unreadIds.isEmpty) return;
+      final batch = db.batch();
+      for (final id in unreadIds) {
+        batch.update(ref.doc(id), {'read': true});
+      }
+      await batch.commit();
+    } catch (e) {
+      debugPrint('Firestore markAllNotificationsRead error: $e');
     }
   }
 }

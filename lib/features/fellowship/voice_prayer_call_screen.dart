@@ -11,6 +11,7 @@ import '../../core/providers/mock_auth_provider.dart';
 import '../../core/services/agora_token_service.dart';
 import '../../core/services/chat_firestore_service.dart';
 import '../../core/services/call_signaling_service.dart';
+import '../../core/services/ringtone_service.dart';
 
 class VoicePrayerCallScreen extends ConsumerStatefulWidget {
   final String partnerId;
@@ -64,6 +65,7 @@ class _VoicePrayerCallScreenState extends ConsumerState<VoicePrayerCallScreen> w
         callerId: authProfile.id,
         calleeId: widget.partnerId,
       );
+      await RingtoneService.instance.playOutgoing();
     }
 
     try {
@@ -98,10 +100,12 @@ class _VoicePrayerCallScreenState extends ConsumerState<VoicePrayerCallScreen> w
       );
       _engine = engine;
 
-      // Watch for the other party declining/ending
+      // Watch for the other party accepting/declining/ending
       _signalingSubscription = CallSignalingService().watchCall(chatId).listen((snap) {
         final status = snap.data()?['status'];
-        if (status == 'declined' || status == 'ended') {
+        if (status == 'accepted') {
+          RingtoneService.instance.stop();
+        } else if (status == 'declined' || status == 'ended') {
           _endCall();
         }
       });
@@ -116,6 +120,7 @@ class _VoicePrayerCallScreenState extends ConsumerState<VoicePrayerCallScreen> w
   Future<void> _endCall() async {
     if (_isEnding) return;
     _isEnding = true;
+    RingtoneService.instance.stop();
     _signalingSubscription?.cancel();
     final authProfile = ref.read(mockAuthNotifierProvider).profile;
     final chatId = ChatFirestoreService.getChatId(authProfile.id, widget.partnerId);
@@ -130,6 +135,7 @@ class _VoicePrayerCallScreenState extends ConsumerState<VoicePrayerCallScreen> w
 
   @override
   void dispose() {
+    RingtoneService.instance.stop();
     _pulseController.dispose();
     _signalingSubscription?.cancel();
     _engine?.leaveChannel();
